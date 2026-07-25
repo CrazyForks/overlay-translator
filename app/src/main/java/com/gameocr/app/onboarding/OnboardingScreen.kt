@@ -102,6 +102,14 @@ private sealed interface MangaOfflineDownloadState {
     ) : MangaOfflineDownloadState
 }
 
+private sealed interface PaddleOcrDownloadState {
+    data object Checking : PaddleOcrDownloadState
+    data object Missing : PaddleOcrDownloadState
+    data object Ready : PaddleOcrDownloadState
+    data class Downloading(val status: String) : PaddleOcrDownloadState
+    data class Error(val detail: String) : PaddleOcrDownloadState
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun OnboardingScreen(
@@ -118,6 +126,9 @@ fun OnboardingScreen(
     var downloadState by remember { mutableStateOf<MlKitDownloadState>(MlKitDownloadState.Checking) }
     var mangaDownloadState by remember {
         mutableStateOf<MangaOfflineDownloadState>(MangaOfflineDownloadState.Checking)
+    }
+    var paddleDownloadState by remember {
+        mutableStateOf<PaddleOcrDownloadState>(PaddleOcrDownloadState.Checking)
     }
 
     LaunchedEffect(firstRun) {
@@ -158,10 +169,42 @@ fun OnboardingScreen(
     }
 
     LaunchedEffect(currentStep) {
-        if (currentStep == OnboardingStep.MANGA_OFFLINE_DOWNLOAD) {
-            mangaDownloadState = MangaOfflineDownloadState.Ready(
-                viewModel.mangaOfflineModelReadiness()
-            )
+        when (currentStep) {
+            OnboardingStep.MANGA_OFFLINE_DOWNLOAD -> {
+                mangaDownloadState = MangaOfflineDownloadState.Ready(
+                    viewModel.mangaOfflineModelReadiness()
+                )
+            }
+            OnboardingStep.PADDLE_OCR_DOWNLOAD -> {
+                paddleDownloadState = if (viewModel.paddleV5ModelReady()) {
+                    PaddleOcrDownloadState.Ready
+                } else {
+                    PaddleOcrDownloadState.Missing
+                }
+            }
+            else -> Unit
+        }
+    }
+
+    fun downloadPaddleOcrModel() {
+        paddleDownloadState = PaddleOcrDownloadState.Downloading("")
+        scope.launch {
+            runCatching {
+                viewModel.downloadPaddleV5Model { status ->
+                    paddleDownloadState = PaddleOcrDownloadState.Downloading(status)
+                }
+                viewModel.paddleV5ModelReady()
+            }.onSuccess { ready ->
+                paddleDownloadState = if (ready) {
+                    PaddleOcrDownloadState.Ready
+                } else {
+                    PaddleOcrDownloadState.Missing
+                }
+            }.onFailure {
+                paddleDownloadState = PaddleOcrDownloadState.Error(
+                    it.message ?: it.javaClass.simpleName
+                )
+            }
         }
     }
 
@@ -261,6 +304,7 @@ fun OnboardingScreen(
                         draft = currentDraft,
                         downloadState = downloadState,
                         mangaDownloadState = mangaDownloadState,
+                        paddleDownloadState = paddleDownloadState,
                         saving = saving,
                         onDraftChange = { draft = it },
                         onDownload = {
@@ -279,6 +323,7 @@ fun OnboardingScreen(
                                 }
                             }
                         },
+                        onDownloadPaddleModel = ::downloadPaddleOcrModel,
                         onDownloadMangaModels = ::downloadMangaOfflineModels,
                         onNext = {
                             if (currentStep == OnboardingStep.SUMMARY) {
@@ -303,6 +348,7 @@ fun OnboardingScreen(
                         draft = currentDraft,
                         downloadState = downloadState,
                         mangaDownloadState = mangaDownloadState,
+                        paddleDownloadState = paddleDownloadState,
                         saving = saving,
                         onDraftChange = { draft = it },
                         onDownload = {
@@ -321,6 +367,7 @@ fun OnboardingScreen(
                                 }
                             }
                         },
+                        onDownloadPaddleModel = ::downloadPaddleOcrModel,
                         onDownloadMangaModels = ::downloadMangaOfflineModels,
                         onNext = {
                             if (currentStep == OnboardingStep.SUMMARY) {
@@ -460,9 +507,11 @@ private fun OnboardingPageSurface(
     draft: OnboardingDraft,
     downloadState: MlKitDownloadState,
     mangaDownloadState: MangaOfflineDownloadState,
+    paddleDownloadState: PaddleOcrDownloadState,
     saving: Boolean,
     onDraftChange: (OnboardingDraft) -> Unit,
     onDownload: () -> Unit,
+    onDownloadPaddleModel: () -> Unit,
     onDownloadMangaModels: () -> Unit,
     onNext: () -> Unit,
     modifier: Modifier = Modifier,
@@ -527,6 +576,11 @@ private fun OnboardingPageSurface(
                         OnboardingStep.TRANSLATION_METHOD -> TranslationMethodPage(
                             draft,
                             onDraftChange,
+                        )
+                        OnboardingStep.PADDLE_OCR_DOWNLOAD -> PaddleOcrDownloadPage(
+                            draft,
+                            paddleDownloadState,
+                            onDownloadPaddleModel,
                         )
                         OnboardingStep.OFFLINE_LANGUAGE_DOWNLOAD -> MlKitDownloadPage(
                             draft,
@@ -867,6 +921,74 @@ private fun TranslationMethodPage(
             color = MaterialTheme.colorScheme.error,
             style = MaterialTheme.typography.bodySmall,
         )
+    }
+}
+
+@Composable
+private fun PaddleOcrDownloadPage(
+    draft: OnboardingDraft,
+    state: PaddleOcrDownloadState,
+    onDownload: () -> Unit,
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    PageHeading(
+        icon = Icons.Default.Download,
+        title = stringResource(R.string.onboarding_paddle_ocr_title),
+        body = stringResource(
+            R.string.onboarding_paddle_ocr_body,
+            Languages.nameOf(context, draft.sourceLang),
+        ),
+    )
+    when (state) {
+        PaddleOcrDownloadState.Checking -> StatusRow(
+            loading = true,
+            text = stringResource(R.string.onboarding_paddle_ocr_checking),
+        )
+        else -> {
+            val ready = state == PaddleOcrDownloadState.Ready
+            ModelRecommendationRow(
+                title = stringResource(R.string.paddle_version_v5_mobile),
+                detail = stringResource(R.string.onboarding_paddle_ocr_model_desc),
+                ready = ready,
+            )
+            when (state) {
+                is PaddleOcrDownloadState.Downloading -> StatusRow(
+                    loading = true,
+                    text = state.status.ifBlank {
+                        stringResource(R.string.onboarding_paddle_ocr_downloading)
+                    },
+                )
+                is PaddleOcrDownloadState.Error -> Text(
+                    stringResource(R.string.onboarding_paddle_ocr_error, state.detail),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                PaddleOcrDownloadState.Ready -> StatusRow(
+                    loading = false,
+                    text = stringResource(R.string.onboarding_paddle_ocr_ready),
+                )
+                PaddleOcrDownloadState.Checking,
+                PaddleOcrDownloadState.Missing -> Unit
+            }
+            if (!ready) {
+                OutlinedButton(
+                    onClick = onDownload,
+                    enabled = state !is PaddleOcrDownloadState.Downloading,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null)
+                    Text(
+                        stringResource(R.string.onboarding_paddle_ocr_download),
+                        modifier = Modifier.padding(start = 8.dp),
+                    )
+                }
+                Text(
+                    stringResource(R.string.onboarding_paddle_ocr_optional),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
     }
 }
 

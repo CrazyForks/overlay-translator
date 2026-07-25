@@ -4,6 +4,7 @@ import com.gameocr.app.data.MergeStrength
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.OverlayPlacement
 import com.gameocr.app.data.OverlayStyleMode
+import com.gameocr.app.data.PaddleModelVersion
 import com.gameocr.app.data.RenderMode
 import com.gameocr.app.data.Settings
 import com.gameocr.app.data.TranslationOutputDirection
@@ -76,6 +77,128 @@ class OnboardingPolicyTest {
                     )
                 ),
             )
+        }
+    }
+
+    @Test
+    fun paddleDownloadStep_isTableDrivenBySourceUsageAndTranslationMethod() {
+        data class Case(
+            val sourceLang: String,
+            val usage: OnboardingUsage,
+            val method: OnboardingTranslationMethod,
+            val expected: Boolean,
+        )
+        val cases = listOf(
+            Case("ja", OnboardingUsage.DAILY, OnboardingTranslationMethod.OFFLINE, false),
+            Case("ko-KR", OnboardingUsage.DAILY, OnboardingTranslationMethod.OFFLINE, false),
+            Case("zh-TW", OnboardingUsage.DAILY, OnboardingTranslationMethod.CLOUD_LLM, false),
+            Case("en-US", OnboardingUsage.MANGA, OnboardingTranslationMethod.CLOUD_LLM, false),
+            Case("fr", OnboardingUsage.DAILY, OnboardingTranslationMethod.OFFLINE, true),
+            Case("ru", OnboardingUsage.DAILY, OnboardingTranslationMethod.CLOUD_LLM, true),
+            Case("ar", OnboardingUsage.MANGA, OnboardingTranslationMethod.CLOUD_LLM, true),
+            Case("th", OnboardingUsage.MANGA, OnboardingTranslationMethod.OFFLINE, false),
+        )
+
+        cases.forEach { case ->
+            val steps = OnboardingPolicy.stepsFor(
+                OnboardingDraft(
+                    sourceLang = case.sourceLang,
+                    usage = case.usage,
+                    translationMethod = case.method,
+                )
+            )
+            assertEquals(
+                "${case.sourceLang}/${case.usage}/${case.method}",
+                case.expected,
+                OnboardingStep.PADDLE_OCR_DOWNLOAD in steps,
+            )
+            if (case.expected) {
+                assertTrue(
+                    steps.indexOf(OnboardingStep.PADDLE_OCR_DOWNLOAD) >
+                        steps.indexOf(OnboardingStep.TRANSLATION_METHOD)
+                )
+            }
+        }
+    }
+
+    @Test
+    fun sourceLanguages_mapToExplicitOcrEngines() {
+        data class Case(val sourceLang: String, val expected: OcrEngineKind)
+        val cases = listOf(
+            Case("ja", OcrEngineKind.ML_KIT_JAPANESE),
+            Case("ja-JP", OcrEngineKind.ML_KIT_JAPANESE),
+            Case("ko", OcrEngineKind.ML_KIT_KOREAN),
+            Case("ko_KR", OcrEngineKind.ML_KIT_KOREAN),
+            Case("zh-CN", OcrEngineKind.ML_KIT_CHINESE),
+            Case("ZH-tw", OcrEngineKind.ML_KIT_CHINESE),
+            Case("en", OcrEngineKind.ML_KIT_LATIN),
+            Case("en-US", OcrEngineKind.ML_KIT_LATIN),
+            Case("fr", OcrEngineKind.PADDLE_ONNX),
+            Case("ru-RU", OcrEngineKind.PADDLE_ONNX),
+            Case("ar", OcrEngineKind.PADDLE_ONNX),
+            Case("th", OcrEngineKind.PADDLE_ONNX),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.sourceLang,
+                case.expected,
+                OnboardingPolicy.ocrEngineForSourceLanguage(case.sourceLang),
+            )
+        }
+    }
+
+    @Test
+    fun applyingOnboarding_setsRecommendedOcrAndPaddleVersion() {
+        data class Case(
+            val sourceLang: String,
+            val usage: OnboardingUsage,
+            val method: OnboardingTranslationMethod,
+            val expectedEngine: OcrEngineKind,
+            val expectedVersion: PaddleModelVersion,
+        )
+        val cases = listOf(
+            Case(
+                "ja",
+                OnboardingUsage.DAILY,
+                OnboardingTranslationMethod.OFFLINE,
+                OcrEngineKind.ML_KIT_JAPANESE,
+                PaddleModelVersion.V6_TINY,
+            ),
+            Case(
+                "ko",
+                OnboardingUsage.DAILY,
+                OnboardingTranslationMethod.CLOUD_LLM,
+                OcrEngineKind.ML_KIT_KOREAN,
+                PaddleModelVersion.V6_TINY,
+            ),
+            Case(
+                "fr",
+                OnboardingUsage.DAILY,
+                OnboardingTranslationMethod.CLOUD_LLM,
+                OcrEngineKind.PADDLE_ONNX,
+                PaddleModelVersion.V5_MOBILE,
+            ),
+            Case(
+                "fr",
+                OnboardingUsage.MANGA,
+                OnboardingTranslationMethod.OFFLINE,
+                OcrEngineKind.MANGA_OCR_JA,
+                PaddleModelVersion.V6_TINY,
+            ),
+        )
+
+        cases.forEach { case ->
+            val actual = OnboardingPolicy.apply(
+                Settings(paddleModelVersion = PaddleModelVersion.V6_TINY),
+                OnboardingDraft(
+                    sourceLang = case.sourceLang,
+                    usage = case.usage,
+                    translationMethod = case.method,
+                ),
+            )
+            assertEquals(case.sourceLang, case.expectedEngine, actual.ocrEngine)
+            assertEquals(case.sourceLang, case.expectedVersion, actual.paddleModelVersion)
         }
     }
 
@@ -384,7 +507,7 @@ class OnboardingPolicyTest {
             Case(
                 OnboardingUsage.DAILY,
                 TranslatorEngine.GOOGLE_ML_KIT,
-                OcrEngineKind.ML_KIT_AUTO,
+                OcrEngineKind.ML_KIT_JAPANESE,
             ),
             Case(
                 OnboardingUsage.MANGA,
@@ -465,6 +588,29 @@ class OnboardingPolicyTest {
                         sakuraReady = case.sakuraReady,
                     )
                 ),
+            )
+        }
+    }
+
+    @Test
+    fun paddleDownloads_includeV5MobileOnlyWhenMissing() {
+        data class Case(
+            val ready: Boolean,
+            val expected: List<ModelDownloadSpec>,
+        )
+        val cases = listOf(
+            Case(
+                ready = false,
+                expected = listOf(ModelDownloadSpec.paddle(PaddleModelVersion.V5_MOBILE)),
+            ),
+            Case(ready = true, expected = emptyList()),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.ready.toString(),
+                case.expected,
+                paddleOcrDownloadSpecs(case.ready),
             )
         }
     }

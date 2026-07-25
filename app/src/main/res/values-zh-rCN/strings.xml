@@ -1569,6 +1569,16 @@
     <string name="onboarding_mlkit_error">下载失败：%1$s</string>
     <string name="onboarding_mlkit_retry">重新下载</string>
 
+    <string name="onboarding_paddle_ocr_title">准备推荐的 OCR 模型</string>
+    <string name="onboarding_paddle_ocr_body">源语言是 %1$s，将默认选择 PaddleOCR。建议现在下载 PP-OCRv5 mobile 模型。</string>
+    <string name="onboarding_paddle_ocr_model_desc">约 20 MB 的端侧 OCR 模型；下载后可离线识别文字。</string>
+    <string name="onboarding_paddle_ocr_checking">正在检查设备上的 PaddleOCR 模型…</string>
+    <string name="onboarding_paddle_ocr_download">下载 PP-OCRv5 mobile</string>
+    <string name="onboarding_paddle_ocr_downloading">PaddleOCR 模型正在后台下载…</string>
+    <string name="onboarding_paddle_ocr_ready">PP-OCRv5 mobile 已就绪。</string>
+    <string name="onboarding_paddle_ocr_error">模型下载失败：%1$s</string>
+    <string name="onboarding_paddle_ocr_optional">可以跳过下载，之后可在“设置 &gt; OCR &gt; PaddleOCR 模型下载”中获取。</string>
+
     <string name="onboarding_manga_offline_title">准备离线日漫翻译</string>
     <string name="onboarding_manga_offline_body">推荐组合：日漫 OCR 负责识别漫画中的日文，Sakura 负责翻译为简体中文。两个模型合计约 1.4 GB，可在后台继续下载。</string>
     <string name="onboarding_manga_offline_checking">正在检查设备上的推荐模型…</string>

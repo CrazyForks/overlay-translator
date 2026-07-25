@@ -1571,6 +1571,16 @@
     <string name="onboarding_mlkit_error">Download failed: %1$s</string>
     <string name="onboarding_mlkit_retry">Try download again</string>
 
+    <string name="onboarding_paddle_ocr_title">Prepare the recommended OCR model</string>
+    <string name="onboarding_paddle_ocr_body">The source language is %1$s, so PaddleOCR will be selected by default. We recommend downloading the PP-OCRv5 mobile model now.</string>
+    <string name="onboarding_paddle_ocr_model_desc">On-device OCR model, about 20 MB. Once downloaded, text recognition works offline.</string>
+    <string name="onboarding_paddle_ocr_checking">Checking the PaddleOCR model on this device…</string>
+    <string name="onboarding_paddle_ocr_download">Download PP-OCRv5 mobile</string>
+    <string name="onboarding_paddle_ocr_downloading">The PaddleOCR model is downloading in the background…</string>
+    <string name="onboarding_paddle_ocr_ready">PP-OCRv5 mobile is ready.</string>
+    <string name="onboarding_paddle_ocr_error">Model download failed: %1$s</string>
+    <string name="onboarding_paddle_ocr_optional">You may skip this download and get it later from Settings &gt; OCR &gt; PaddleOCR model download.</string>
+
     <string name="onboarding_manga_offline_title">Prepare offline Japanese manga translation</string>
     <string name="onboarding_manga_offline_body">Recommended setup: Manga OCR reads Japanese artwork and Sakura translates it to Simplified Chinese. The two downloads total about 1.4 GB and can continue in the background.</string>
     <string name="onboarding_manga_offline_checking">Checking the recommended models on this device…</string>

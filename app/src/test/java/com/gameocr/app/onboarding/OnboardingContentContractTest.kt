@@ -110,6 +110,77 @@ class OnboardingContentContractTest {
         )
     }
 
+    @Test
+    fun paddleOcrRecommendation_isTableDrivenAcrossSupportedLocales() {
+        data class Case(
+            val path: String,
+            val expectedTitle: String,
+            val expectedBody: String,
+            val expectedDownload: String,
+            val expectedOptional: String,
+        )
+        val cases = listOf(
+            Case(
+                path = "src/main/res/values/strings.xml",
+                expectedTitle = "Prepare the recommended OCR model",
+                expectedBody = "The source language is %1\$s, so PaddleOCR will be selected by " +
+                    "default. We recommend downloading the PP-OCRv5 mobile model now.",
+                expectedDownload = "Download PP-OCRv5 mobile",
+                expectedOptional = "You may skip this download and get it later from Settings > " +
+                    "OCR > PaddleOCR model download.",
+            ),
+            Case(
+                path = "src/main/res/values-zh-rCN/strings.xml",
+                expectedTitle = "准备推荐的 OCR 模型",
+                expectedBody = "源语言是 %1\$s，将默认选择 PaddleOCR。建议现在下载 PP-OCRv5 mobile 模型。",
+                expectedDownload = "下载 PP-OCRv5 mobile",
+                expectedOptional = "可以跳过下载，之后可在“设置 > OCR > PaddleOCR 模型下载”中获取。",
+            ),
+        )
+
+        cases.forEach { case ->
+            val strings = stringResources(sourceFile(case.path))
+            assertEquals(case.path, case.expectedTitle, strings["onboarding_paddle_ocr_title"])
+            assertEquals(case.path, case.expectedBody, strings["onboarding_paddle_ocr_body"])
+            assertEquals(
+                case.path,
+                case.expectedDownload,
+                strings["onboarding_paddle_ocr_download"],
+            )
+            assertEquals(
+                case.path,
+                case.expectedOptional,
+                strings["onboarding_paddle_ocr_optional"],
+            )
+        }
+    }
+
+    @Test
+    fun paddleOcrRecommendation_hasDownloadPageAndV5DownloadAction() {
+        val screenSource = sourceFile(
+            "src/main/java/com/gameocr/app/onboarding/OnboardingScreen.kt"
+        ).readText()
+        val viewModelSource = sourceFile(
+            "src/main/java/com/gameocr/app/onboarding/OnboardingViewModel.kt"
+        ).readText()
+        val markers = listOf(
+            "OnboardingStep.PADDLE_OCR_DOWNLOAD",
+            "private fun PaddleOcrDownloadPage(",
+            "R.string.onboarding_paddle_ocr_download",
+            "onDownloadPaddleModel = ::downloadPaddleOcrModel",
+        )
+
+        markers.forEach { marker ->
+            assertTrue("$marker is missing", screenSource.contains(marker))
+        }
+        assertTrue(
+            "PaddleOCR v5 mobile download action is missing",
+            viewModelSource.contains(
+                "ModelDownloadSpec.paddle(PaddleModelVersion.V5_MOBILE)"
+            ),
+        )
+    }
+
     private fun stringResources(file: File): Map<String, String> {
         val document = DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(file)
         return document.getElementsByTagName("string").let { nodes ->
