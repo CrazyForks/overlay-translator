@@ -34,7 +34,7 @@ class CaptureChromeOrderingTest {
 
         cases.forEach { case ->
             val snippet = functionSnippet(source, case.signature)
-            val captureIndex = snippet.indexOf("val full = shotter.capture()")
+            val captureIndex = snippet.indexOf("shotter.capture()")
             val restoreIndex = snippet.indexOf(case.expectedRestore, captureIndex)
 
             assertTrue("${case.name} should capture before restoring loading", captureIndex >= 0)
@@ -113,10 +113,14 @@ class CaptureChromeOrderingTest {
             "fun clear()"
         )
 
-        assertTrue("clear should dismiss loading", "clearLoading()" in snippet)
-        assertTrue("clear should still dismiss stale errors", "dismissError()" in snippet)
-        assertTrue("clear should still hide floating translation window", "floatingWindow.hide()" in snippet)
-        assertTrue("clear should still remove block overlays", "blocksView?.let" in snippet)
+        assertTrue(
+            "clear should remove loading, errors, and block overlays through the transient layer",
+            "clearBlocksAndLoading()" in snippet,
+        )
+        assertTrue(
+            "clear should still destroy the floating translation window",
+            "clearFloatingWindow()" in snippet,
+        )
     }
 
     @Test
@@ -131,7 +135,7 @@ class CaptureChromeOrderingTest {
         val cases = listOf(
             Case(
                 name = "screenshot success",
-                marker = "val full = shotter.capture()",
+                marker = "var full = shotter.capture()",
                 expectedRestore = "restoreCaptureChromeOnce(showLoading = showLoadingAfterScreenshot)",
             ),
             Case(
@@ -160,6 +164,35 @@ class CaptureChromeOrderingTest {
     }
 
     @Test
+    fun loopCapture_preservesFloatingWindowAndMasksItsCapturedBounds() {
+        val snippet = functionSnippet(captureServiceSource(), "private suspend fun captureOnce(")
+        val blockingResultIndex = snippet.indexOf("overlay?.hasBlockingLoopResult()")
+        val policyIndex = snippet.indexOf("floatingWindowCaptureAction(")
+        val preserveIndex = snippet.indexOf(
+            "FloatingWindowCaptureAction.PRESERVE_AND_MASK",
+            policyIndex,
+        )
+        val boundsIndex = snippet.indexOf(
+            "floatingWindowBoundsForCapture = floatingWindowState.second",
+            preserveIndex,
+        )
+        val captureIndex = snippet.indexOf("var full = shotter.capture()", boundsIndex)
+        val maskIndex = snippet.indexOf("maskFloatingWindowFromCapture(full, captureMask)", captureIndex)
+
+        assertTrue("loop should only wait for blocking overlay results", blockingResultIndex >= 0)
+        assertTrue("loop capture should choose a render-mode-aware window policy", policyIndex >= 0)
+        assertTrue("floating mode should preserve the visible window", preserveIndex > policyIndex)
+        assertTrue("preserved window bounds should be recorded before capture", boundsIndex > preserveIndex)
+        assertTrue("screenshot should happen after recording the window bounds", captureIndex > boundsIndex)
+        assertTrue("captured overlay pixels should be masked before OCR", maskIndex > captureIndex)
+        assertTrue(
+            "blocks mode should retain the temporary-hide fallback",
+            "FloatingWindowCaptureAction.HIDE_TEMPORARILY" in snippet &&
+                "setFloatingWindowHiddenForCapture(hidden = true)" in snippet,
+        )
+    }
+
+    @Test
     fun applyOverlayConfig_tableDriven_keepsViewMutationsOnMainThread() {
         data class Case(
             val name: String,
@@ -173,7 +206,7 @@ class CaptureChromeOrderingTest {
             Case("overlay properties", "overlay?.apply"),
             Case(
                 "floating window resync uses the resolved fixed/adaptive style",
-                "syncFloatingWindowFromSettings(effectiveOverlaySettings)",
+                "syncFloatingWindowFromSettings(",
             ),
             Case("floating button resize", "it.applyResize()"),
             Case("floating button snap animation", "it.applySnapPreference(settings.floatingButtonSnapToEdge)"),

@@ -148,6 +148,16 @@
     <string name="settings_about_open_source_licenses">开源许可证</string>
     <string name="settings_about_third_party_notice_summary">本应用所含依赖项及内置或按需下载模型的第三方声明</string>
     <string name="settings_about_view_licenses">查看许可证与声明</string>
+    <string name="settings_about_share_label">分享给朋友</string>
+    <string name="settings_about_share_summary">觉得屏译好用？推荐给朋友吧。</string>
+    <string name="settings_about_share_action">分享屏译</string>
+    <string name="settings_about_share_chooser">分享屏译</string>
+    <string name="settings_about_share_subject">屏译 Screen Translator｜开源免费的屏幕翻译工具</string>
+    <string name="settings_about_share_text">屏译 Screen Translator 是一款开源免费的屏幕翻译 / OCR 工具。\n特别适合外文论坛、海外购物与交易平台、漫画和游戏等缺少内置翻译的场景。\n支持悬浮窗截图翻译、区域与全屏识别、循环翻译、漫画模式，以及离线和云端 LLM 翻译；还可划词翻译、查看词形与同义词，并使用 TTS 朗读。\n最新版下载：%1$s\n开源项目：%2$s\n请从官方发布渠道下载，谨防付费倒卖。</string>
+    <string name="main_share_prompt_title">愿意把屏译推荐给朋友吗？</string>
+    <string name="main_share_prompt_message">如果屏译对你有帮助，欢迎推荐给同样有翻译需求的朋友。</string>
+    <string name="main_share_prompt_confirm">分享给朋友</string>
+    <string name="main_share_prompt_decline">不分享</string>
     <string name="settings_about_licenses_page_title">开源许可证与第三方声明</string>
     <string name="settings_about_app_license_title">本应用开源许可证</string>
     <string name="settings_about_third_party_notices_title">第三方声明</string>
@@ -514,7 +524,7 @@
     <string name="settings_preprocess_invert">颜色反转 (暗底白字时打开)</string>
     <string name="settings_preprocess_binarize">Otsu 二值化 (复杂背景)</string>
     <string name="settings_overlay_style_adaptive">自动适配画面</string>
-    <string name="settings_overlay_style_adaptive_desc">仅用于紧贴原文：根据每个文字区域自动选择配色、背景和字号。</string>
+    <string name="settings_overlay_style_adaptive_desc">用于紧贴原文的译文块：自动适配配色、背景和字号。使用 PaddleOCR 或日漫 OCR 时，也会对已确认的漫画气泡自动进行形状适配；失败时回退为原有矩形显示。</string>
     <string name="settings_overlay_adaptive_layout_locked">开启后固定为覆盖原文、零偏移、自动换行并关闭避让；关闭后恢复原来的布局设置。</string>
     <string name="settings_overlay_theme_label">译文配色</string>
     <string name="settings_theme_classic_dark">经典深色</string>
@@ -647,8 +657,10 @@
     <string name="settings_btn_open_a11y">打开系统无障碍设置</string>
     <string name="settings_developer_mode_label">开发者模式</string>
     <string name="settings_developer_mode_hint">显示用于排查 OCR 与翻译问题的诊断选项。</string>
+    <string name="settings_batch_cumulative_completion_time_label">批次累计完成时间</string>
+    <string name="settings_batch_cumulative_completion_time_hint">开启后，翻译日志显示从整批开始到当前条完成的累计时间；关闭时显示单条或单个原生批组耗时。</string>
     <string name="settings_ocr_screenshot_saving_label">保存 OCR 截图</string>
-    <string name="settings_ocr_screenshot_saving_hint">保存 OCR 使用的截图并关联到运行日志；每个应用进程最多保存 8 张。</string>
+    <string name="settings_ocr_screenshot_saving_hint">保存 OCR 使用的截图并关联到运行日志；使用日漫 OCR 时还会保存 OCR 四边形、文字擦除蒙版和气泡内部蒙版，供原型验证。每个应用进程最多保存 8 张截图和 4 组三层蒙版。</string>
     <string name="settings_disable_translation_cache_label">禁用翻译缓存</string>
     <string name="settings_disable_translation_cache_hint">性能测试时始终执行真实翻译请求，不读取或写入内存译文缓存。</string>
     <string name="settings_ocr_red_box_mode_label">OCR 红框模式</string>
@@ -842,6 +854,8 @@
     <string name="lang_picker_search_placeholder">搜索语言</string>
     <string name="lang_picker_no_match">无匹配语言</string>
     <string name="lang_picker_selected">已选中</string>
+    <string name="lang_picker_already_target">目标语言已选</string>
+    <string name="lang_picker_already_source">源语言已选</string>
     <string name="lang_picker_pin">加星标</string>
     <string name="lang_picker_unpin">取消星标</string>
 
@@ -886,6 +900,8 @@
     <string name="log_msg_loop_on">循环模式开启</string>
     <string name="log_msg_capture_failed">截屏失败：未拿到画面（可能需要重新授权 / Shizuku 不可用）</string>
     <string name="log_msg_capture_frame_dumped_format">OCR 截图已保存：%1$s</string>
+    <string name="log_msg_manga_mask_debug_saved_format">漫画蒙版调试图（%1$s）已保存；气泡通过：%2$d/%3$d</string>
+    <string name="log_msg_manga_mask_debug_diagnostics_format">漫画气泡判定：%1$s</string>
     <string name="log_msg_shizuku_dry_run_failed">Shizuku dry-run 失败——大概率未通过 ADB 配对。已停止截屏服务。</string>
     <string name="log_msg_ocr_failed_format">OCR 识别失败 [%1$s]</string>
     <string name="log_msg_ocr_results_format">识别到 %1$d 段 [%2$s]: %3$s</string>
@@ -1197,6 +1213,34 @@
     <string name="menu_word_select">划词翻译</string>
     <string name="menu_full_screen_skill">全屏翻译</string>
     <string name="menu_next_page">下一组</string>
+    <string name="floating_tour_progress">悬浮球漫游 %1$d / %2$d</string>
+    <string name="floating_tour_main_title">请长按蓝色悬浮球</string>
+    <string name="floating_tour_main_body">请按住高亮悬浮球约 1 秒，直到弧形菜单弹出。不是单击；只有真实长按成功后，引导才会继续。完成引导后，单击执行%1$s，拖动可移动位置。</string>
+    <string name="floating_tour_hold_cue">按住 1 秒</string>
+    <string name="floating_tour_skip">跳过引导</string>
+    <string name="floating_tour_skip_confirm_progress">悬浮球漫游</string>
+    <string name="floating_tour_skip_confirm_title">确认跳过本次引导？</string>
+    <string name="floating_tour_skip_confirm_body">跳过后将关闭悬浮球漫游。需要重新运行时，请在首页「截屏服务」卡片中点击「帮助」并完成初始化引导；如果截屏服务未运行，漫游会在下次启用服务时开始。</string>
+    <string name="floating_tour_continue">继续引导</string>
+    <string name="floating_tour_confirm_skip">确认跳过</string>
+    <string name="floating_tour_next">下一项</string>
+    <string name="floating_tour_try_next_page">演示翻页</string>
+    <string name="floating_tour_done">完成</string>
+    <string name="floating_tour_complete_progress">悬浮球漫游完成</string>
+    <string name="floating_tour_complete_title">全部认识完啦！</string>
+    <string name="floating_tour_complete_body">你已经认识了所有悬浮球功能。之后长按主悬浮球即可再次打开菜单；「下一组」用于菜单翻页，并会在最后一组循环回到第一组。</string>
+    <string name="floating_tour_start_using">开始使用</string>
+    <string name="floating_tour_loop_body">把主球切换为循环翻译；之后单击主球即可开始或停止重复翻译。</string>
+    <string name="floating_tour_region_body">不离开当前应用，直接重新选择截屏区域。</string>
+    <string name="floating_tour_language_body">快速切换翻译使用的源语言和目标语言。</string>
+    <string name="floating_tour_preset_body">切换已保存的 OCR、翻译、语言、TTS 与显示预设。</string>
+    <string name="floating_tour_settings_body">打开完整设置页，调整详细参数。</string>
+    <string name="floating_tour_home_body">返回屏译首页。</string>
+    <string name="floating_tour_word_select_body">把主球切换为划词翻译；之后单击主球，再拖框选择需要翻译的文字。</string>
+    <string name="floating_tour_full_screen_body">把主球切换为全屏翻译；之后单击主球即可截取并翻译当前设定区域。</string>
+    <string name="floating_tour_next_page_body">一页放不下全部功能时，用这个球打开下一组。点击“演示翻页”，引导会在下一页继续。</string>
+    <string name="floating_tour_next_page_wrap_body">这也是菜单翻页球；在最后一页点击它，会循环回到第一组。</string>
+    <string name="floating_tour_generic_item_body">执行这个弧形菜单功能。</string>
     <string name="floating_skill_full_screen_label">全屏翻译</string>
     <string name="floating_skill_word_select_label">划词翻译</string>
     <string name="toast_skill_switched_full_screen">主球已切换：单击=全屏翻译</string>
@@ -1234,6 +1278,8 @@
     <string name="word_card_label_phonetic">读音</string>
     <string name="word_card_label_pos">词性</string>
     <string name="word_card_label_definitions">释义</string>
+    <string name="word_card_label_inflections">词形变化</string>
+    <string name="word_card_label_synonyms">同义词</string>
     <string name="word_card_label_difficulty_notes">难点解释</string>
     <string name="word_card_label_examples">例句</string>
     <string name="word_card_btn_copy_source">复制原文</string>
@@ -1348,7 +1394,7 @@
     <string name="settings_orient_manual_active_hint">已手动锁定方向，自动判别已被跳过。</string>
 
     <!-- 默认词典 Prompt -->
-    <string name="default_dictionary_prompt">你是一名{source}→{target}的双语词典助手。请把用户输入当作一个单词或固定短语来处理，**只输出**下面格式的 JSON，不要加 markdown、代码块、解释。\n{\n  \"phonetic\": \"音标或读音（{source}; 无则空串）\",\n  \"pos\": [\"词性，{target}缩写，如 名/动/形 或 n./v./adj.; 无则空数组\"],\n  \"definitions\": [\"{target}释义 1\", \"{target}释义 2\"],\n  \"difficulty_notes\": [\"用{target}解释生僻含义、专业领域、缩写全称、文化背景或易混淆用法；普通词为空数组\"],\n  \"examples\": [\n    { \"src\": \"{source}例句\", \"dst\": \"{target}译文\" }\n  ]\n}\n要求：\n1. 必须是合法 JSON，键名与上面完全一致；\n2. 没有信息的字段用空串或空数组占位；\n3. 例句最多 2 条，太多删减；\n4. 生僻词、专业名词、缩写、文化专名或易混淆用法必须给出难点解释，最多 3 条，不要重复释义；普通词用空数组；\n5. 不要把整段当句子翻译，只做词典查询。\n</string>
+    <string name="default_dictionary_prompt">你是一名{source}→{target}的双语词典助手。请把用户输入当作一个单词或固定短语来处理，**只输出**下面格式的 JSON，不要加 markdown、代码块、解释。\n{\n  \"phonetic\": \"音标或读音（{source}; 无则空串）\",\n  \"pos\": [\"词性，{target}缩写，如 名/动/形 或 n./v./adj.; 无则空数组\"],\n  \"definitions\": [\"{target}释义 1\", \"{target}释义 2\"],\n  \"inflections\": [\"词形标签: {source}词形，如过去式、过去分词、复数、比较级或适用的变位；无则空数组\"],\n  \"synonyms\": [\"{source}常用同义词或近义词；无则空数组\"],\n  \"difficulty_notes\": [\"用{target}解释生僻含义、专业领域、缩写全称、文化背景或易混淆用法；普通词为空数组\"],\n  \"examples\": [\n    { \"src\": \"{source}例句\", \"dst\": \"{target}译文\" }\n  ]\n}\n要求：\n1. 必须是合法 JSON，键名与上面完全一致；\n2. 没有信息的字段用空串或空数组占位；\n3. 词形变化最多 6 项、同义词最多 5 项、例句最多 2 条；\n4. 生僻词、专业名词、缩写、文化专名或易混淆用法必须给出难点解释，最多 3 条，不要重复释义；普通词用空数组；\n5. 不要把整段当句子翻译，只做词典查询。\n</string>
     <string name="settings_orientation_model_name">ONNX 方向模型包</string>
     <string name="settings_orientation_model_desc">可选的 PaddleOCR 方向模型包（约 7.5 MB）：整图 0/90/180/270 分类 + 文本行 0/180 分类。安装后可在 OCR 前路由竖向画面，也能对倒置横排文本重跑一次并把框映射回原图。</string>
     <string name="settings_orientation_model_status_ready_format">方向模型已就绪 (%1$d KB)</string>
@@ -1450,4 +1496,137 @@
     <string name="model_download_failure_downloaded_format">已下载：%1$s</string>
     <string name="model_download_failure_downloaded_total_format">已下载：%1$s / %2$s</string>
     <string name="model_download_retry">重试</string>
+    <!-- 初次使用引导 -->
+    <string name="main_help">帮助</string>
+    <string name="onboarding_title">快速设置</string>
+    <string name="onboarding_skip">跳过</string>
+    <string name="onboarding_skip_confirm_title">跳过初始化引导？</string>
+    <string name="onboarding_skip_confirm_message">确认跳过初始化引导？你可以稍后在首页「截屏服务」卡片中点击「帮助」，重新进入引导。</string>
+    <string name="onboarding_skip_continue_action">继续引导</string>
+    <string name="onboarding_skip_confirm_action">确认跳过</string>
+    <string name="onboarding_next">继续</string>
+    <string name="onboarding_finish">保存并开始使用</string>
+    <string name="onboarding_progress">第 %1$d 步，共 %2$d 步</string>
+    <string name="onboarding_rail_title">设置你的屏译体验</string>
+    <string name="onboarding_rail_body">每页只做一个选择。完成后可从主屏“系统兼容”区域随时重新运行。</string>
+
+    <string name="onboarding_welcome_title">欢迎使用屏译\nScreen Translator</string>
+    <string name="onboarding_welcome_body">接下来将通过几个简单步骤，选择你最常翻译的内容，并完成语言、展示方式和翻译服务等基础配置。所有选项之后都可以在设置中修改。</string>
+    <string name="onboarding_open_source_title">完全开源，免费使用</string>
+    <string name="onboarding_open_source_body">本软件完全开源，所有功能均不收取激活费、会员费或授权费。请通过官方发布渠道下载，谨防付费倒卖、冒充官方或以“解锁功能”为名的收费行为。</string>
+    <string name="onboarding_open_source_service_note">云端 LLM、TTS 等第三方服务可能由服务商单独计费，与本软件无关。请妥善保管 API Key，不要提供给他人。</string>
+    <string name="onboarding_welcome_action">我已了解，开始设置</string>
+    <string name="onboarding_source_title">你正在阅读什么语言？</string>
+    <string name="onboarding_source_body">请选择明确的源语言，这样离线翻译才能准备正确的语言包。</string>
+    <string name="onboarding_source_label">源语言</string>
+    <string name="onboarding_target_title">你希望翻译成什么语言？</string>
+    <string name="onboarding_target_body">这个选择同时决定译文语言，以及离线翻译需要下载的模型。</string>
+    <string name="onboarding_target_label">目标语言</string>
+    <string name="onboarding_language_same_error">源语言和目标语言不能相同。</string>
+
+    <string name="onboarding_display_title">希望怎样展示翻译？</string>
+    <string name="onboarding_display_body">请选择日常内容翻译时的展示方式，之后仍可在设置中修改。</string>
+    <string name="onboarding_display_adaptive">原位自适应覆盖</string>
+    <string name="onboarding_display_adaptive_desc">在原文附近替换显示，并根据截图自动适配颜色和字号。</string>
+    <string name="onboarding_display_below">显示在原文下方</string>
+    <string name="onboarding_display_below_desc">保留原文，在下方用固定样式显示译文。</string>
+    <string name="onboarding_display_floating">悬浮结果窗口</string>
+    <string name="onboarding_display_floating_desc">在可拖动、可缩放的窗口中集中显示原文和译文。</string>
+
+    <string name="onboarding_usage_title">你最常翻译什么内容？</string>
+    <string name="onboarding_usage_body">我们会应用一套稳妥的初始值，之后仍可在设置中逐项修改。</string>
+    <string name="onboarding_usage_daily">日常内容</string>
+    <string name="onboarding_usage_daily_desc">应用、游戏、字幕、菜单和一般文字。</string>
+    <string name="onboarding_usage_manga">漫画</string>
+    <string name="onboarding_usage_manga_desc">适合对话气泡、竖排文字和需要贴合画面的内容。</string>
+    <string name="onboarding_usage_manga_applied">漫画默认：原位自适应覆盖 + 合并相邻同行气泡，强度为“标准”。</string>
+
+    <string name="onboarding_manga_direction_title">漫画译文希望怎样排列？</string>
+    <string name="onboarding_manga_direction_body">请选择输出方向。页面中横竖排混合时，建议使用自动跟随。</string>
+    <string name="onboarding_direction_auto">跟随识别结果</string>
+    <string name="onboarding_direction_auto_desc">每个文本块保持识别到的原文方向。</string>
+    <string name="onboarding_direction_horizontal">横排，从左到右</string>
+    <string name="onboarding_direction_horizontal_desc">译文按横向、从左到右排列。</string>
+    <string name="onboarding_direction_vertical">竖排，从右到左</string>
+    <string name="onboarding_direction_vertical_desc">使用传统漫画式竖排，并让列从右向左排列。</string>
+
+    <string name="onboarding_method_title">希望用什么方式翻译？</string>
+    <string name="onboarding_method_body">离线翻译会在设备上处理文字；划词翻译仅云端 LLM 支持。TTS 朗读可与离线或云端翻译搭配使用。</string>
+    <string name="onboarding_method_offline">离线翻译</string>
+    <string name="onboarding_method_offline_desc">下载所选语言包后在设备上运行，不需要 API Key。</string>
+    <string name="onboarding_method_offline_manga_desc">日漫推荐使用端侧“日漫 OCR + Sakura 翻译”，支持日文 → 简体中文。</string>
+    <string name="onboarding_method_cloud">云端 LLM</string>
+    <string name="onboarding_method_cloud_desc">仅此选项支持划词翻译。选择服务商，并设置 URL、API Key 和模型名称。</string>
+    <string name="onboarding_offline_pair_unsupported">离线翻译不支持这个语言组合。请修改语言，或选择云端 LLM。</string>
+    <string name="onboarding_manga_offline_pair_unsupported">日漫 OCR + Sakura 仅支持日文 → 简体中文。请修改语言，或选择云端 LLM。</string>
+
+    <string name="onboarding_mlkit_title">下载离线语言包</string>
+    <string name="onboarding_mlkit_body">在第一次翻译前准备 %1$s → %2$s。每个所需模型约 30 MB，建议使用 Wi-Fi。</string>
+    <string name="onboarding_mlkit_checking">正在检查设备上已有的模型…</string>
+    <string name="onboarding_mlkit_missing">仍需下载：%1$s</string>
+    <string name="onboarding_mlkit_download">下载语言包</string>
+    <string name="onboarding_mlkit_downloading">正在下载语言模型，请保持此页面开启…</string>
+    <string name="onboarding_mlkit_ready">语言组合已经可以离线翻译。</string>
+    <string name="onboarding_mlkit_unsupported">离线翻译不支持这个语言组合。请选择云端 LLM，或返回修改语言。</string>
+    <string name="onboarding_mlkit_error">下载失败：%1$s</string>
+    <string name="onboarding_mlkit_retry">重新下载</string>
+
+    <string name="onboarding_paddle_ocr_title">准备推荐的 OCR 模型</string>
+    <string name="onboarding_paddle_ocr_body">源语言是 %1$s，将默认选择 PaddleOCR。建议现在下载 PP-OCRv5 mobile 模型。</string>
+    <string name="onboarding_paddle_ocr_model_desc">约 20 MB 的端侧 OCR 模型；下载后可离线识别文字。</string>
+    <string name="onboarding_paddle_ocr_checking">正在检查设备上的 PaddleOCR 模型…</string>
+    <string name="onboarding_paddle_ocr_download">下载 PP-OCRv5 mobile</string>
+    <string name="onboarding_paddle_ocr_downloading">PaddleOCR 模型正在后台下载…</string>
+    <string name="onboarding_paddle_ocr_ready">PP-OCRv5 mobile 已就绪。</string>
+    <string name="onboarding_paddle_ocr_error">模型下载失败：%1$s</string>
+    <string name="onboarding_paddle_ocr_optional">可以跳过下载，之后可在“设置 &gt; OCR &gt; PaddleOCR 模型下载”中获取。</string>
+
+    <string name="onboarding_manga_offline_title">准备离线日漫翻译</string>
+    <string name="onboarding_manga_offline_body">推荐组合：日漫 OCR 负责识别漫画中的日文，Sakura 负责翻译为简体中文。两个模型合计约 1.4 GB，可在后台继续下载。</string>
+    <string name="onboarding_manga_offline_checking">正在检查设备上的推荐模型…</string>
+    <string name="onboarding_manga_offline_ocr">日漫 OCR</string>
+    <string name="onboarding_manga_offline_ocr_desc">针对漫画画面优化的端侧日文识别模型，约 141 MB。</string>
+    <string name="onboarding_manga_offline_sakura">Sakura 翻译</string>
+    <string name="onboarding_manga_offline_sakura_desc">端侧日文 → 简体中文 ACGN 翻译模型，约 1.26 GB。</string>
+    <string name="onboarding_manga_offline_download">下载推荐模型</string>
+    <string name="onboarding_manga_offline_downloading">推荐模型正在后台下载…</string>
+    <string name="onboarding_manga_offline_ready">日漫 OCR 和 Sakura 均已就绪。</string>
+    <string name="onboarding_manga_offline_error">模型下载失败：%1$s</string>
+    <string name="onboarding_manga_offline_optional">可以直接继续；后台下载进度仍可在设置中查看。</string>
+    <string name="onboarding_model_ready">已就绪</string>
+    <string name="onboarding_model_not_downloaded">未下载</string>
+
+    <string name="onboarding_cloud_title">选择并配置云端 LLM</string>
+    <string name="onboarding_cloud_body">选择服务商后会填入已核验的默认值。若你使用区域端点、订阅专线或兼容网关，三个字段仍可编辑。</string>
+    <string name="onboarding_cloud_custom">自定义</string>
+    <string name="onboarding_cloud_url">Base URL</string>
+    <string name="onboarding_cloud_api_key">API Key</string>
+    <string name="onboarding_cloud_model">模型名称</string>
+    <string name="onboarding_cloud_error_url_required">请输入 Base URL。</string>
+    <string name="onboarding_cloud_error_url_invalid">请输入包含有效主机名的完整 HTTP 或 HTTPS URL。</string>
+    <string name="onboarding_cloud_error_api_key">请输入 API Key，或点“跳过”稍后再配置。</string>
+    <string name="onboarding_cloud_error_model">请输入模型名称。</string>
+
+    <string name="onboarding_tts_title">希望用什么方式朗读译文？</string>
+    <string name="onboarding_tts_body">TTS 与翻译方式相互独立。系统朗读可使用设备上已安装的语音数据；HTTP 和在线服务商需要稍后继续配置。</string>
+    <string name="onboarding_tts_disabled">暂不启用 TTS</string>
+    <string name="onboarding_tts_disabled_desc">不显示 TTS 朗读控件。</string>
+    <string name="onboarding_tts_system">系统朗读（离线推荐）</string>
+    <string name="onboarding_tts_system_desc">使用 Android TTS 引擎；已安装离线语音数据时，无需联网或服务商 API Key。</string>
+    <string name="onboarding_tts_http">本地 / 自定义 HTTP</string>
+    <string name="onboarding_tts_http_desc">使用电脑、局域网服务或自定义网关；完成引导后在设置中填写地址。</string>
+    <string name="onboarding_tts_volcengine">火山引擎</string>
+    <string name="onboarding_tts_minimax">MiniMax</string>
+    <string name="onboarding_tts_mimo">MiMo</string>
+    <string name="onboarding_tts_online_desc">使用服务商 API；完成引导后需在 TTS 设置中填写凭据和音色参数。</string>
+
+    <string name="onboarding_summary_title">准备完成</string>
+    <string name="onboarding_summary_body">请确认下面的初始设置。保存只会修改与本次引导有关的翻译和展示选项。</string>
+    <string name="onboarding_summary_languages">语言</string>
+    <string name="onboarding_summary_usage">主要用途</string>
+    <string name="onboarding_summary_display">展示方式</string>
+    <string name="onboarding_summary_translation">翻译引擎</string>
+    <string name="onboarding_summary_tts">TTS</string>
+    <string name="onboarding_summary_manga_offline">日漫 OCR + Sakura</string>
+    <string name="onboarding_summary_manga_defaults">漫画保护项已开启：自动适配画面，并以“标准”强度合并相邻同行气泡。</string>
 </resources>

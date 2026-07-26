@@ -2,6 +2,7 @@ package com.gameocr.app.overlay
 
 import android.app.Dialog
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Rect
@@ -21,6 +22,7 @@ import android.view.View
 import android.view.Window
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.view.WindowCompat
@@ -36,6 +38,7 @@ import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.data.TranslationBlockInteractionMode
 import com.gameocr.app.ocr.TextBlock
 import com.gameocr.app.ocr.TextOrientation
+import com.gameocr.app.ocr.ShapeAwareBubblePatch
 import com.gameocr.app.util.VerticalDiagnosticLog
 import com.gameocr.app.util.physicalDisplaySize
 import kotlin.math.ceil
@@ -107,6 +110,9 @@ class OverlayManager(
     private val blockStreamingUpdateCounts = mutableMapOf<Int, Int>()
     private val blockFrameUpdateCoalescers =
         mutableMapOf<Int, LatestFrameUpdateCoalescer<PendingOverlayTextUpdate>>()
+    private val bubblePatchViews = mutableListOf<ImageView>()
+    private val bubblePatchBitmaps = mutableListOf<Bitmap>()
+    private val bubblePatchHiddenBlockIndices = mutableSetOf<Int>()
     private var blocksDiagnosticId: Long? = null
 
     private data class TranslationBlockContent(
@@ -401,9 +407,12 @@ class OverlayManager(
      * 批模式翻译（如 DeepL）走这条；流模式走 [prepareFloatingWindow] + [updateFloatingWindowText]。
      */
     fun showFullScreen(pairs: List<Pair<String, String>>) {
-        clearLoading()
-        clear()
-        if (pairs.isEmpty()) return
+        clearBlocksAndLoading()
+        if (pairs.isEmpty()) {
+            clearFloatingWindow()
+            return
+        }
+        floatingStreamingUpdateCounts.clear()
         VerticalDiagnosticLog.i("overlay showFullScreen pairs=${pairs.size} textSizeSp=$textSizeSp mode=$floatingWindowContentMode")
         pairs.forEachIndexed { index, (src, dst) ->
             VerticalDiagnosticLog.i(
@@ -426,9 +435,12 @@ class OverlayManager(
      * 逐段填入。等价于 [showBlocks] 之于 BLOCKS 模式，但内容渲染在悬浮窗里。
      */
     fun prepareFloatingWindow(sources: List<String>) {
-        clearLoading()
-        clear()
-        if (sources.isEmpty()) return
+        clearBlocksAndLoading()
+        if (sources.isEmpty()) {
+            clearFloatingWindow()
+            return
+        }
+        floatingStreamingUpdateCounts.clear()
         VerticalDiagnosticLog.i("overlay prepareFloatingWindow sources=${sources.size} textSizeSp=$textSizeSp mode=$floatingWindowContentMode")
         sources.forEachIndexed { index, source ->
             VerticalDiagnosticLog.i("overlay prepareFloatingWindow #${index + 1} src=${source.toDiagText()}")
@@ -481,8 +493,15 @@ class OverlayManager(
         applyFloatingWindowText(index, PendingOverlayTextUpdate(text, phase))
     }
 
-    /** 仅悬浮窗口模式有效：是否当前可见（用于循环模式 hasActiveBlocks 等价的判定，目前未用）。 */
+    /** 仅悬浮窗口模式有效：是否当前可见。 */
     fun isFloatingWindowShown(): Boolean = floatingWindow.isShown()
+
+    /** 当前悬浮窗口在屏幕坐标系中的边界；用于循环截图后遮蔽自身内容。 */
+    fun currentFloatingWindowBounds(): android.graphics.Rect? = floatingWindow.currentBounds()
+
+    /** 循环截图前临时停止/恢复悬浮窗口绘制，不销毁常驻窗口及其内容。 */
+    fun setFloatingWindowHiddenForCapture(hidden: Boolean): Boolean =
+        floatingWindow.setHiddenForCapture(hidden)
 
     /**
      * 重新加载 DraggableOverlayWindow 字段：在 applyOverlayConfig 时由外部调用，确保
@@ -492,8 +511,11 @@ class OverlayManager(
      * **线程约束：必须在主线程调用**。内部会改 rootView.background / setContent，View 系统只
      * 接受主线程操作。调用方（CaptureService.applyOverlayConfig）记得 mainScope.launch 包一层。
      */
-    fun syncFloatingWindowFromSettings(settings: Settings) {
-        floatingWindow.applyFromSettings(settings)
+    fun syncFloatingWindowFromSettings(
+        settings: Settings,
+        syncLockedState: Boolean,
+    ) {
+        floatingWindow.applyFromSettings(settings, syncLockedState)
         // 配色 / 字号 / 内容模式变了 → 重建内容，让用户在 Settings 改完立即看到效果。
         // 不在显示中或者从没渲染过则不动。
         val pairs = lastFloatingPairs ?: return
@@ -1439,6 +1461,104 @@ class OverlayManager(
         applyBlockText(index, PendingOverlayTextUpdate(text, phase))
     }
 
+    /**
+     * Replaces successfully repaired adaptive blocks with transparent, shape-aware bitmap patches.
+     *
+     * Patch bounds use capture coordinates, so only [regionOffset] is applied. User text offsets
+     * must not move the repaired pixels away from the source glyphs they cover.
+     */
+    internal fun showShapeAwareBubblePatches(
+        patches: List<ShapeAwareBubblePatch>,
+        diagnosticId: Long? = null,
+    ): Int {
+        val root = blocksView as? FrameLayout ?: return 0
+        if (overlayStyleMode != OverlayStyleMode.ADAPTIVE || patches.isEmpty()) return 0
+
+        clearBubblePatches(restoreFallback = true)
+        val diagPrefix = diagnosticId.toDiagPrefix()
+        var displayed = 0
+        patches.forEach { patch ->
+            val displayBounds = patch.displayBounds()
+            val displayWidth = displayBounds.width.coerceAtLeast(1)
+            val displayHeight = displayBounds.height.coerceAtLeast(1)
+            val sourceBitmap = runCatching {
+                Bitmap.createBitmap(
+                    patch.pixels,
+                    patch.bounds.width,
+                    patch.bounds.height,
+                    Bitmap.Config.ARGB_8888,
+                )
+            }.getOrElse { error ->
+                VerticalDiagnosticLog.w(
+                    error,
+                    "${diagPrefix}shape patch bitmap allocation failed model=${patch.modelBubbleIndex}",
+                )
+                return@forEach
+            }
+            val displayBitmap = if (
+                sourceBitmap.width == displayWidth && sourceBitmap.height == displayHeight
+            ) {
+                sourceBitmap
+            } else {
+                runCatching {
+                    Bitmap.createScaledBitmap(
+                        sourceBitmap,
+                        displayWidth,
+                        displayHeight,
+                        true,
+                    )
+                }.getOrElse { error ->
+                    sourceBitmap.recycle()
+                    VerticalDiagnosticLog.w(
+                        error,
+                        "${diagPrefix}shape patch scaling failed model=${patch.modelBubbleIndex}",
+                    )
+                    return@forEach
+                }.also {
+                    sourceBitmap.recycle()
+                }
+            }
+            val view = ImageView(context).apply {
+                setImageBitmap(displayBitmap)
+                scaleType = ImageView.ScaleType.FIT_XY
+                isClickable = false
+                isFocusable = false
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }
+            val layoutParams = FrameLayout.LayoutParams(displayWidth, displayHeight).apply {
+                leftMargin = displayBounds.left + regionOffset.x
+                topMargin = displayBounds.top + regionOffset.y
+            }
+            val added = runCatching {
+                root.addView(view, layoutParams)
+            }.onFailure { error ->
+                view.setImageDrawable(null)
+                displayBitmap.recycle()
+                VerticalDiagnosticLog.w(
+                    error,
+                    "${diagPrefix}shape patch view add failed model=${patch.modelBubbleIndex}",
+                )
+            }.isSuccess
+            if (!added) return@forEach
+
+            bubblePatchViews += view
+            bubblePatchBitmaps += displayBitmap
+            bubblePatchHiddenBlockIndices += patch.blockIndices
+            displayed += 1
+            VerticalDiagnosticLog.i(
+                "${diagPrefix}shape patch displayed model=${patch.modelBubbleIndex} " +
+                    "source=${patch.bounds.width}x${patch.bounds.height} " +
+                    "display=${displayWidth}x${displayHeight} " +
+                    "screen=(${layoutParams.leftMargin},${layoutParams.topMargin}) " +
+                    "scale=${patch.coordinateScale} blocks=${patch.blockIndices}",
+            )
+        }
+        bubblePatchHiddenBlockIndices.forEach { index ->
+            blockViews[index]?.visibility = View.INVISIBLE
+        }
+        return displayed
+    }
+
     private fun applyBlockText(index: Int, update: PendingOverlayTextUpdate) {
         val text = update.text
         val phase = update.phase
@@ -1481,9 +1601,9 @@ class OverlayManager(
         updateTranslationBlockActionState(index)
     }
 
-    /** 是否仍有贴字框或悬浮窗口译文显示在屏幕上。 */
-    fun hasActiveResult(): Boolean =
-        (blocksView != null && blockViews.isNotEmpty()) || floatingWindow.isShown()
+    /** 贴字框必须手动关闭后循环才能继续；常驻悬浮窗口不属于阻塞结果。 */
+    fun hasBlockingLoopResult(): Boolean =
+        blocksView != null && blockViews.isNotEmpty()
 
     private fun handleFloatingWindowUserDismiss() {
         performPlaybackOverlayDismiss(
@@ -1494,15 +1614,10 @@ class OverlayManager(
         }
     }
 
-    fun clear() {
+    private fun clearBlocksAndLoading() {
         clearLoading()
         dismissError()
-        floatingWindow.hide()
-        floatingContentView = null
-        floatingStreamingUpdateCounts.clear()
-        floatingFrameUpdateCoalescers.values.forEach { it.discardPending() }
-        floatingFrameUpdateCoalescers.clear()
-        lastFloatingPairs = null
+        clearBubblePatches(restoreFallback = false)
         val dialog = blocksDialog
         blocksDialog = null
         if (dialog != null) {
@@ -1517,6 +1632,38 @@ class OverlayManager(
         blockFrameUpdateCoalescers.values.forEach { it.discardPending() }
         blockFrameUpdateCoalescers.clear()
         blocksDiagnosticId = null
+    }
+
+    private fun clearBubblePatches(restoreFallback: Boolean) {
+        bubblePatchViews.forEach { view ->
+            view.setImageDrawable(null)
+            (view.parent as? FrameLayout)?.removeView(view)
+        }
+        bubblePatchViews.clear()
+        bubblePatchBitmaps.forEach { bitmap ->
+            if (!bitmap.isRecycled) bitmap.recycle()
+        }
+        bubblePatchBitmaps.clear()
+        if (restoreFallback) {
+            bubblePatchHiddenBlockIndices.forEach { index ->
+                blockViews[index]?.visibility = View.VISIBLE
+            }
+        }
+        bubblePatchHiddenBlockIndices.clear()
+    }
+
+    private fun clearFloatingWindow() {
+        floatingWindow.hide()
+        floatingContentView = null
+        floatingStreamingUpdateCounts.clear()
+        floatingFrameUpdateCoalescers.values.forEach { it.discardPending() }
+        floatingFrameUpdateCoalescers.clear()
+        lastFloatingPairs = null
+    }
+
+    fun clear() {
+        clearBlocksAndLoading()
+        clearFloatingWindow()
     }
 
     /**
@@ -1538,7 +1685,7 @@ class OverlayManager(
             // SurfaceFlinger 只单独排除该层但物理屏正常。可惜 MIUI / HyperOS 的反盗版逻辑
             // 看到屏幕上有 FLAG_SECURE 层就直接拒绝整张 MediaProjection 输出，Shizuku
             // screencap 也 exit=1。代价远大于自循环防护，已撤回。BLOCKS 模式自循环靠
-            // [hasActiveResult] 与循环结果生命周期共同避免把应用自己的译文截回去。
+            // [hasBlockingLoopResult] 阻塞下一帧；悬浮窗口则只在截图瞬间临时停止绘制。
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START

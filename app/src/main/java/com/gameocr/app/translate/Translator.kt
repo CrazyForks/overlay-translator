@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.Flow
 data class BatchTranslationUpdate(
     val index: Int,
     val text: String?,
+    val elapsedMs: Long? = null,
 )
 
 internal class BatchTranslationProgressState(size: Int) {
@@ -73,9 +74,17 @@ interface Translator {
         settings: Settings,
         onUpdate: (BatchTranslationUpdate) -> Unit,
     ): List<String?> {
+        val startedAtNs = System.nanoTime()
         val results = translateBatch(sources, settings)
+        val elapsedMs = ((System.nanoTime() - startedAtNs) / 1_000_000L).coerceAtLeast(0L)
         results.forEachIndexed { index, text ->
-            onUpdate(BatchTranslationUpdate(index = index, text = text))
+            onUpdate(
+                BatchTranslationUpdate(
+                    index = index,
+                    text = text,
+                    elapsedMs = elapsedMs,
+                )
+            )
         }
         return results
     }
@@ -109,7 +118,8 @@ interface Translator {
 
     /**
      * 划词翻译专用：把输入当**单词 / 短语**走字典化 prompt，返回 [WordResult]（音标 / 词性 / 释义
-     * / 难点解释 / 例句）。默认返回 null 表示「本引擎不支持词典化」，调用方应回退到 [translate]。
+     * / 词形变化 / 同义词 / 难点解释 / 例句）。默认返回 null 表示「本引擎不支持词典化」，
+     * 调用方应回退到 [translate]。
      *
      * 仅 OpenAI 兼容引擎实现：通过 [Settings.dictionaryPrompt] 让 LLM 返回 JSON，解析失败也返
      * 回 null（CaptureService 看到 null 就走纯翻译）。DeepL / 百度 / 腾讯 / Google / 火山 / 有道
@@ -124,6 +134,8 @@ interface Translator {
  * - [phonetic]：单词读音 / 音标（源语言）；CJK 用罗马音或汉语拼音
  * - [pos]：词性标签数组（目标语言），如 ["名", "动"] / ["n.", "v."]
  * - [definitions]：目标语言释义列表，最少 1 条
+ * - [inflections]：源语言中常见的词形变化，如过去式、过去分词、复数或比较级
+ * - [synonyms]：源语言同义词或近义词
  * - [difficultyNotes]：生僻词、专业术语、缩写或易混淆用法的难点解释；普通词留空
  * - [examples]：例句对，最多 2 条
  * - [fallbackTranslation]：当 LLM 拒绝词典化（比如选中其实是短句）时给的纯翻译兜底
@@ -132,13 +144,16 @@ data class WordResult(
     val phonetic: String = "",
     val pos: List<String> = emptyList(),
     val definitions: List<String> = emptyList(),
+    val inflections: List<String> = emptyList(),
+    val synonyms: List<String> = emptyList(),
     val difficultyNotes: List<String> = emptyList(),
     val examples: List<ExamplePair> = emptyList(),
     val fallbackTranslation: String? = null
 ) {
     /** 任何字典字段都为空 → 等价于纯翻译失败。 */
     fun isEmpty(): Boolean = phonetic.isBlank() && pos.isEmpty() &&
-        definitions.isEmpty() && difficultyNotes.isEmpty() && examples.isEmpty()
+        definitions.isEmpty() && inflections.isEmpty() && synonyms.isEmpty() &&
+        difficultyNotes.isEmpty() && examples.isEmpty()
 }
 
 data class ExamplePair(val src: String, val dst: String)

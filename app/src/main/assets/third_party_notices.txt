@@ -16,7 +16,7 @@ Third-party runtime software
 
 The Android release runtime dependency graph and the native code built into the
 application include the principal projects below. Version numbers refer to the
-v0.4.1 build configuration. Transitive modules belonging to the same project
+v0.4.2 build configuration. Transitive modules belonging to the same project
 family are grouped together.
 
 Apache License 2.0
@@ -128,6 +128,16 @@ Reserved.
 - models/doc_orientation/textline_ori.onnx
   SHA-256 94A6A0A0425F2B5F08B5DF72086F2D72ABE40F1D22F6D12D2CD83674F11F2FF3
   https://huggingface.co/PaddlePaddle/PP-LCNet_x0_25_textline_ori_onnx
+
+The APK also contains the detector-v4-s_int8.onnx comic text and bubble
+detector from ogkalu/comic-text-and-bubble-detector under the Apache License
+2.0. It is an RT-DETR-v2 model used only for local shape-aware manga bubble
+rendering.
+
+- models/bubble_detection/detector-v4-s_int8.onnx
+  SHA-256 5FE9E4F576E49D4E7E8B0E029D6D3CDC252ABD4694113E1CAE120E62C931EA79
+  https://huggingface.co/ogkalu/comic-text-and-bubble-detector
+  https://github.com/ogkalu2/comic-translate
 
 Optional model downloads
 ========================

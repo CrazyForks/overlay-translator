@@ -54,6 +54,8 @@ class SettingsRepository @Inject constructor(
         val DeveloperOptionsEnabled = booleanPreferencesKey("developer_options_enabled")
         val OcrScreenshotSavingEnabled = booleanPreferencesKey("ocr_screenshot_saving_enabled")
         val DisableTranslationCache = booleanPreferencesKey("disable_translation_cache")
+        val BatchCumulativeCompletionTimeEnabled =
+            booleanPreferencesKey("batch_cumulative_completion_time_enabled")
         val DisableCrossLineContextTranslation =
             booleanPreferencesKey("disable_cross_line_context_translation")
         val OcrRedBoxModeEnabled = booleanPreferencesKey("ocr_red_box_mode_enabled")
@@ -215,6 +217,8 @@ class SettingsRepository @Inject constructor(
         val MangaOcrDbnetUnclipRatio = floatPreferencesKey("manga_ocr_dbnet_unclip_ratio")
         val BubbleClusterGap = intPreferencesKey("bubble_cluster_gap")
         val MangaOcrCropPaddingPx = intPreferencesKey("manga_ocr_crop_padding_px")
+        val SharePromptMainEntryCount = intPreferencesKey("share_prompt_main_entry_count")
+        val SharePromptShown = booleanPreferencesKey("share_prompt_shown")
     }
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -263,6 +267,25 @@ class SettingsRepository @Inject constructor(
     val settings: Flow<Settings> = context.dataStore.data.map { prefs -> prefs.toSettings() }
 
     suspend fun get(): Settings = settings.first()
+
+    suspend fun recordMainScreenEntryForSharePrompt(): Boolean {
+        var eligibleToShow = false
+        context.dataStore.edit { prefs ->
+            val decision = SharePromptPolicy.onMainScreenEntry(
+                storedEntryCount = prefs[Keys.SharePromptMainEntryCount] ?: 0,
+                promptAlreadyShown = prefs[Keys.SharePromptShown] ?: false,
+            )
+            prefs[Keys.SharePromptMainEntryCount] = decision.nextEntryCount
+            eligibleToShow = decision.eligibleToShow
+        }
+        return eligibleToShow
+    }
+
+    suspend fun markSharePromptShown() {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.SharePromptShown] = true
+        }
+    }
 
     internal fun setDefaultPromptProvidersForTest(
         prompt: () -> String,
@@ -411,7 +434,18 @@ class SettingsRepository @Inject constructor(
     suspend fun update(transform: (Settings) -> Settings) {
         context.dataStore.edit { prefs ->
             val current = prefs.toSettings()
-            val next = MangaOcrAdvancedSettingsPolicy.normalize(transform(current))
+            val requested = transform(current)
+            val languageSafe = if (
+                translationLanguageCodesConflict(requested.sourceLang, requested.targetLang)
+            ) {
+                requested.copy(
+                    sourceLang = current.sourceLang,
+                    targetLang = current.targetLang,
+                )
+            } else {
+                requested
+            }
+            val next = MangaOcrAdvancedSettingsPolicy.normalize(languageSafe)
             prefs.putSecure(Keys.BaseUrl, next.baseUrl)
             prefs.putSecure(Keys.ApiKey, next.apiKey)
             prefs[Keys.Model] = next.model
@@ -434,6 +468,8 @@ class SettingsRepository @Inject constructor(
             prefs[Keys.DeveloperOptionsEnabled] = next.developerOptionsEnabled
             prefs[Keys.OcrScreenshotSavingEnabled] = next.ocrScreenshotSavingEnabled
             prefs[Keys.DisableTranslationCache] = next.disableTranslationCache
+            prefs[Keys.BatchCumulativeCompletionTimeEnabled] =
+                next.batchCumulativeCompletionTimeEnabled
             prefs[Keys.DisableCrossLineContextTranslation] = next.disableCrossLineContextTranslation
             prefs[Keys.OcrRedBoxModeEnabled] = next.ocrRedBoxModeEnabled
             prefs[Keys.OcrRedBoxShowSourceText] = next.ocrRedBoxShowSourceText
@@ -671,6 +707,9 @@ class SettingsRepository @Inject constructor(
                 ?: default.ocrScreenshotSavingEnabled,
             disableTranslationCache = this[Keys.DisableTranslationCache]
                 ?: default.disableTranslationCache,
+            batchCumulativeCompletionTimeEnabled =
+                this[Keys.BatchCumulativeCompletionTimeEnabled]
+                    ?: default.batchCumulativeCompletionTimeEnabled,
             disableCrossLineContextTranslation = this[Keys.DisableCrossLineContextTranslation]
                 ?: default.disableCrossLineContextTranslation,
             ocrRedBoxModeEnabled = this[Keys.OcrRedBoxModeEnabled]

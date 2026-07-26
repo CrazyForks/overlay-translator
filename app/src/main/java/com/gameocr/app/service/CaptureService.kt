@@ -4,7 +4,10 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Matrix
+import android.graphics.Paint
 import android.graphics.Point
 import android.graphics.Rect
 import android.media.projection.MediaProjection
@@ -18,6 +21,7 @@ import androidx.core.app.ServiceCompat
 import com.gameocr.app.R
 import com.gameocr.app.capture.CaptureCoordinateRelation
 import com.gameocr.app.capture.CaptureRegion
+import com.gameocr.app.capture.FloatingWindowCaptureAction
 import com.gameocr.app.capture.LoopFrameChangePolicy
 import com.gameocr.app.capture.LoopFrameFingerprint
 import com.gameocr.app.capture.LoopFrameFingerprintFactory
@@ -41,9 +45,13 @@ import com.gameocr.app.capture.LoopActiveResultDecision
 import com.gameocr.app.capture.LoopIndicatorMode
 import com.gameocr.app.capture.LoopRuntimePolicy
 import com.gameocr.app.capture.MediaProjectionScreenshotter
+import com.gameocr.app.capture.OverlayCaptureRect
 import com.gameocr.app.capture.Screenshotter
 import com.gameocr.app.capture.ShizukuScreenshotter
 import com.gameocr.app.capture.diagnoseCaptureGeometry
+import com.gameocr.app.capture.floatingWindowCaptureAction
+import com.gameocr.app.capture.mapOverlayBoundsToCapture
+import com.gameocr.app.capture.shouldHideFloatingButtonForCapture
 import com.gameocr.app.shizuku.ShizukuCapabilities
 import com.gameocr.app.data.LogRepository
 import com.gameocr.app.data.LoopTriggerMode
@@ -58,10 +66,12 @@ import com.gameocr.app.data.Settings
 import com.gameocr.app.data.SettingsRepository
 import com.gameocr.app.data.TranslationPreset
 import com.gameocr.app.data.TranslationPresetCatalog
+import com.gameocr.app.data.translationLanguageCodesConflict
 import com.gameocr.app.data.needsRawBitmap
 import com.gameocr.app.data.Languages
 import com.gameocr.app.ocr.BitmapPreprocessor
 import com.gameocr.app.ocr.MangaOcrEngine
+import com.gameocr.app.ocr.MangaDelayedMaskDebugSessionManager
 import com.gameocr.app.ocr.MangaOcrModelInstaller
 import com.gameocr.app.ocr.MangaOcrStartupPolicy
 import com.gameocr.app.ocr.OcrEngine
@@ -82,6 +92,7 @@ import com.gameocr.app.data.resolveTranslationOutputSettings
 import com.gameocr.app.data.FloatingSkill
 import com.gameocr.app.tts.ttsFailureMessage
 import com.gameocr.app.overlay.FloatingButtonManager
+import com.gameocr.app.overlay.FloatingMenuTourPrefs
 import com.gameocr.app.overlay.AdaptiveOverlayStyle
 import com.gameocr.app.overlay.AdaptiveOverlayStyleAnalyzer
 import com.gameocr.app.overlay.AdaptiveTextLayoutPhase
@@ -159,6 +170,9 @@ internal fun allowsFrequentTextStabilityProbe(
         OcrEngineKind.PADDLE_AI_STUDIO -> false
     }
 }
+
+internal fun supportsShapeAwareBubblePatches(engine: OcrEngineKind): Boolean =
+    engine == OcrEngineKind.MANGA_OCR_JA || engine == OcrEngineKind.PADDLE_ONNX
 
 /**
  * 截屏前台服务：所有截屏 + OCR + 翻译 + 悬浮窗显示都在这里串。
@@ -254,6 +268,10 @@ class CaptureService : Service() {
             ACTION_STOP -> stopSelf()
             ACTION_TRIGGER_ONCE -> triggerOnce()
             ACTION_PICK_REGION -> showRegionPickerOverlay()
+            ACTION_RUN_FLOATING_TOUR -> {
+                FloatingMenuTourPrefs.reset(this)
+                floatingButton?.requestFirstUseTour()
+            }
         }
         return START_NOT_STICKY
     }
@@ -342,6 +360,11 @@ class CaptureService : Service() {
             settingsRepository = settingsRepository,
             ioScope = scope
         ).also {
+            it.firstUseTourPending =
+                FloatingMenuTourPrefs.shouldShow(this@CaptureService)
+            it.onFirstUseTourCompleted = {
+                FloatingMenuTourPrefs.markCompleted(this@CaptureService)
+            }
             // 截图区域调整：用悬浮窗版替代旧的 Activity 跳转——不再切走游戏 / 漫画，且重复
             // 点菜单也只弹一次（show 内部去重）。
             it.onMenuPickRegion = { showRegionPickerOverlay() }
@@ -378,19 +401,13 @@ class CaptureService : Service() {
             mainScope.launch { floatingButton?.show() }
         }
 
-        // 订阅 settings 热更新：跳过首次 emit（避免和上面 show() 流程重叠初始化），之后任何
-        // 改动都立即应用到 overlay 与悬浮按钮。一次性 collect，cleanupCapture 时取消。
+        // Settings flow 是悬浮窗锁状态的唯一权威来源，首次 emit 同样需要应用初始状态。
+        // 循环截图取得的 Settings 快照可能已经过期，只刷新渲染参数，不能覆盖刚切换的锁状态。
         settingsCollectJob?.cancel()
         settingsCollectJob = scope.launch {
-            var first = true
             var lastEngine: com.gameocr.app.data.TranslatorEngine? = null
             settingsRepository.settings.collect { s ->
-                if (first) {
-                    first = false
-                    lastEngine = s.translatorEngine
-                    return@collect
-                }
-                applyOverlayConfig(s)
+                applyOverlayConfig(s, syncFloatingWindowLock = true)
                 // 端侧 LLM 引擎切走时主动释放权重：避免 500MB+ 模型常驻内存抢 Bitmap / OCR 模型空间。
                 val wasLocal = lastEngine?.name?.startsWith("LOCAL_") == true
                 val isLocal = s.translatorEngine.name.startsWith("LOCAL_")
@@ -711,21 +728,6 @@ class CaptureService : Service() {
                 return
             }
             logWordSelectPerf("crop_ready", "crop=${cropped.width}x${cropped.height}")
-            dumpCaptureFrameForDebug(
-                context = this,
-                diagId = diagId,
-                label = "word-select-crop",
-                developerOptionsEnabled = settings.developerOptionsEnabled,
-                screenshotSavingEnabled = settings.ocrScreenshotSavingEnabled,
-                bitmap = cropped,
-            )?.let { file ->
-                logVerticalDiag(diagId, "debug crop dumped path=${file.absolutePath}")
-                logRepository.info(
-                    LogRepository.Category.CAPTURE,
-                    getString(R.string.log_msg_capture_frame_dumped_format, file.name),
-                    imagePath = file.absolutePath,
-                )
-            }
             val croppedStats = sampleBitmapFrameStats(cropped)
             logVerticalDiag(
                 diagId,
@@ -990,18 +992,20 @@ class CaptureService : Service() {
             val settings = settingsRepository.get()
             mainScope.launch {
                 panel.show(settings) { source, target ->
-                    scope.launch {
-                        settingsRepository.update {
-                            it.copy(sourceLang = source, targetLang = target)
+                    if (!translationLanguageCodesConflict(source, target)) {
+                        scope.launch {
+                            settingsRepository.update {
+                                it.copy(sourceLang = source, targetLang = target)
+                            }
                         }
-                    }
-                    overlay?.showInfoHint(
-                        getString(
-                            R.string.language_quick_updated_format,
-                            Languages.nameOf(this@CaptureService, source),
-                            Languages.nameOf(this@CaptureService, target)
+                        overlay?.showInfoHint(
+                            getString(
+                                R.string.language_quick_updated_format,
+                                Languages.nameOf(this@CaptureService, source),
+                                Languages.nameOf(this@CaptureService, target)
+                            )
                         )
-                    )
+                    }
                 }
             }
         }
@@ -1483,6 +1487,9 @@ class CaptureService : Service() {
         val diagId = captureSequence.incrementAndGet()
         var captureAttemptStarted = false
         var captureChromeRestored = false
+        var floatingButtonHiddenForCapture = false
+        var floatingWindowHiddenForCapture = false
+        var floatingWindowBoundsForCapture: OverlayCaptureRect? = null
         fun restoreCaptureChromeOnce(showLoading: Boolean) {
             if (captureChromeRestored) return
             captureChromeRestored = true
@@ -1491,12 +1498,26 @@ class CaptureService : Service() {
                 restoreFloatingButton = restoreFloatingButtonAfterScreenshot
             )
         }
+        suspend fun restoreFloatingWindowAfterCapture() {
+            if (!floatingWindowHiddenForCapture) return
+            floatingWindowHiddenForCapture = false
+            withContext(Dispatchers.Main) {
+                overlay?.setFloatingWindowHiddenForCapture(hidden = false)
+            }
+        }
+        suspend fun restoreFloatingButtonAfterCapture() {
+            if (!floatingButtonHiddenForCapture) return
+            floatingButtonHiddenForCapture = false
+            withContext(Dispatchers.Main) {
+                floatingButton?.setHiddenForCapture(hidden = false)
+            }
+        }
         try {
             if (loopMode) {
                 val loopSettings = settingsRepository.get()
-                val hasActiveResult = overlay?.hasActiveResult() == true
+                val hasBlockingResult = overlay?.hasBlockingLoopResult() == true
                 val activeResultDecision = LoopRuntimePolicy.activeResultDecision(
-                    hasActiveResult = hasActiveResult,
+                    hasBlockingResult = hasBlockingResult,
                     translationInFlight = loopTranslationInFlight,
                 )
                 when (activeResultDecision) {
@@ -1505,7 +1526,7 @@ class CaptureService : Service() {
                         logLoopRuntimeTransition(
                             diagId,
                             state = "translation_in_flight",
-                            message = "loop wait reason=translation_in_flight activeResult=$hasActiveResult",
+                            message = "loop wait reason=translation_in_flight blockingResult=$hasBlockingResult",
                         )
                         return
                     }
@@ -1527,7 +1548,61 @@ class CaptureService : Service() {
                 restoreCaptureChromeOnce(showLoading = false)
                 return
             }
-            val full = shotter.capture()
+            if (loopMode) {
+                val loopSettings = settingsRepository.get()
+                var captureChromeChanged = false
+                val floatingButtonShown = withContext(Dispatchers.Main) {
+                    floatingButton?.isShown() == true
+                }
+                if (
+                    shouldHideFloatingButtonForCapture(
+                        loopMode = true,
+                        isFloatingButtonShown = floatingButtonShown,
+                    )
+                ) {
+                    floatingButtonHiddenForCapture = withContext(Dispatchers.Main) {
+                        floatingButton?.setHiddenForCapture(hidden = true) == true
+                    }
+                    captureChromeChanged = floatingButtonHiddenForCapture
+                }
+                val floatingWindowState = withContext(Dispatchers.Main) {
+                    val manager = overlay
+                    val shown = manager?.isFloatingWindowShown() == true
+                    shown to manager?.currentFloatingWindowBounds()
+                }
+                when (
+                    floatingWindowCaptureAction(
+                        loopMode = true,
+                        renderMode = loopSettings.renderMode,
+                        isFloatingWindowShown = floatingWindowState.first,
+                    )
+                ) {
+                    FloatingWindowCaptureAction.NONE -> Unit
+                    FloatingWindowCaptureAction.HIDE_TEMPORARILY -> {
+                        floatingWindowHiddenForCapture = withContext(Dispatchers.Main) {
+                            overlay?.setFloatingWindowHiddenForCapture(hidden = true) == true
+                        }
+                        captureChromeChanged =
+                            captureChromeChanged || floatingWindowHiddenForCapture
+                    }
+                    FloatingWindowCaptureAction.PRESERVE_AND_MASK -> {
+                        floatingWindowBoundsForCapture = floatingWindowState.second?.let { bounds ->
+                            OverlayCaptureRect(
+                                left = bounds.left,
+                                top = bounds.top,
+                                right = bounds.right,
+                                bottom = bounds.bottom,
+                            )
+                        }
+                    }
+                }
+                if (captureChromeChanged) {
+                    delay(CAPTURE_CHROME_SETTLE_MS)
+                }
+            }
+            var full = shotter.capture()
+            restoreFloatingButtonAfterCapture()
+            restoreFloatingWindowAfterCapture()
             if (full == null) {
                 // 截屏链路返回 null（MediaProjection token 失效 / Shizuku 调用失败等），
                 // 之前直接 return，用户只看到圈转一下；现在显式提示。
@@ -1541,6 +1616,20 @@ class CaptureService : Service() {
             // 在拿 settings 之前先 rescale region，免得拿到的是旧屏幕方向的坐标。
             restoreCaptureChromeOnce(showLoading = showLoadingAfterScreenshot)
             val screenNow = physicalDisplaySize(this@CaptureService)
+            val captureMask = mapOverlayBoundsToCapture(
+                bounds = floatingWindowBoundsForCapture,
+                overlayWidth = screenNow.width,
+                overlayHeight = screenNow.height,
+                captureWidth = full.width,
+                captureHeight = full.height,
+            )
+            if (captureMask != null) {
+                full = maskFloatingWindowFromCapture(full, captureMask)
+                logVerticalDiag(
+                    diagId,
+                    "floating window preserved during capture and masked bounds=$captureMask"
+                )
+            }
             settingsRepository.rescaleCaptureRegionIfNeeded(screenNow.width, screenNow.height)
             val settings = settingsRepository.get()
             val fullStats = sampleBitmapFrameStats(full)
@@ -1549,23 +1638,8 @@ class CaptureService : Service() {
                 "screenshot full=${full.width}x${full.height} stats=${fullStats.toDiagString()}"
             )
             logCaptureGeometry(diagId, "fullScreen", full)
-            dumpCaptureFrameForDebug(
-                context = this,
-                diagId = diagId,
-                label = "full",
-                developerOptionsEnabled = settings.developerOptionsEnabled,
-                screenshotSavingEnabled = settings.ocrScreenshotSavingEnabled,
-                bitmap = full,
-            )?.let { file ->
-                logVerticalDiag(diagId, "debug frame dumped path=${file.absolutePath}")
-                logRepository.info(
-                    LogRepository.Category.CAPTURE,
-                    getString(R.string.log_msg_capture_frame_dumped_format, file.name),
-                    imagePath = file.absolutePath
-                )
-            }
             logBlankLikeFrame(diagId, "screenshot", fullStats)
-            applyOverlayConfig(settings)
+            applyOverlayConfig(settings, syncFloatingWindowLock = false)
             logVerticalSettings(diagId, settings, screenNow.width, screenNow.height)
 
             val region = settings.captureRegion
@@ -2315,6 +2389,9 @@ class CaptureService : Service() {
                 )
                 logVerticalDiag(diagId, "first OCR produced no usable ROI; fallback to OCR text stability")
             }
+            val delayedMaskCoordinateScale = if (settings.preprocess.upscale2x) 2f else 1f
+            val delayedMaskImageWidth = (workBitmap.width * delayedMaskCoordinateScale).toInt()
+            val delayedMaskImageHeight = (workBitmap.height * delayedMaskCoordinateScale).toInt()
             val adaptiveStyles = analyzeAdaptiveOverlayStyles(workBitmap, blocks, settings, diagId)
             workBitmap.recycle()
             val postOcrStability = LoopFrameStabilityPolicy.afterOcr(
@@ -2406,13 +2483,52 @@ class CaptureService : Service() {
                 "render mode=${settings.renderMode.name} recognizedOrientation=$recognizedReadingOrientation " +
                     "renderOrientation=$renderOrientation blocks=${blocks.size}"
             )
+            val delayedMaskDebugBatch = if (
+                supportsShapeAwareBubblePatches(effectiveEngine) &&
+                mangaOcrEngine.isShapeAwareRenderingEnabled(settings) &&
+                settings.renderMode == RenderMode.BLOCKS &&
+                adaptiveOverlayActive(settings.overlayStyleMode, settings.renderMode) &&
+                !redBoxActive
+            ) {
+                mangaOcrEngine.claimDelayedMaskDebugBatch(
+                    imageWidth = delayedMaskImageWidth,
+                    imageHeight = delayedMaskImageHeight,
+                    coordinateScale = delayedMaskCoordinateScale,
+                    blocks = blocks,
+                )
+            } else {
+                null
+            }
+            delayedMaskDebugBatch?.let { batch ->
+                logVerticalDiag(
+                    diagId,
+                    "delayed mask debug claimed blocks=${batch.blockCount} " +
+                        "image=${delayedMaskImageWidth}x$delayedMaskImageHeight"
+                )
+            }
             when {
-                redBoxActive -> renderBlocks(blocks, settings, renderOrientation, diagId, adaptiveStyles)
+                redBoxActive -> renderBlocks(
+                    blocks,
+                    settings,
+                    renderOrientation,
+                    diagId,
+                    adaptiveStyles,
+                    delayedMaskDebugBatch,
+                )
                 settings.renderMode == RenderMode.BLOCKS ->
-                    renderBlocks(blocks, settings, renderOrientation, diagId, adaptiveStyles)
+                    renderBlocks(
+                        blocks,
+                        settings,
+                        renderOrientation,
+                        diagId,
+                        adaptiveStyles,
+                        delayedMaskDebugBatch,
+                    )
                 else -> renderFloatingWindow(blocks, settings, diagId)
             }
         } finally {
+            restoreFloatingButtonAfterCapture()
+            restoreFloatingWindowAfterCapture()
             if (captureAttemptStarted) {
                 restoreCaptureChromeOnce(showLoading = false)
                 logVerticalDiag(diagId, "finish")
@@ -2432,6 +2548,30 @@ class CaptureService : Service() {
         val b = region.bottom.coerceIn(0, src.height)
         if (r - l <= 8 || b - t <= 8) return src
         return Bitmap.createBitmap(src, l, t, r - l, b - t)
+    }
+
+    private fun maskFloatingWindowFromCapture(
+        source: Bitmap,
+        bounds: OverlayCaptureRect,
+    ): Bitmap {
+        val target = if (source.isMutable) {
+            source
+        } else {
+            source.copy(Bitmap.Config.ARGB_8888, true) ?: return source
+        }
+        Canvas(target).drawRect(
+            bounds.left.toFloat(),
+            bounds.top.toFloat(),
+            bounds.right.toFloat(),
+            bounds.bottom.toFloat(),
+            Paint().apply {
+                color = Color.WHITE
+                style = Paint.Style.FILL
+                isAntiAlias = false
+            },
+        )
+        if (target !== source) source.recycle()
+        return target
     }
 
     private fun analyzeAdaptiveOverlayStyles(
@@ -2534,12 +2674,20 @@ class CaptureService : Service() {
         orientation: TextOrientation = TextOrientation.HORIZONTAL_LTR,
         diagId: Long? = null,
         adaptiveStyles: List<AdaptiveOverlayStyle> = emptyList(),
+        delayedMaskDebugBatch: MangaDelayedMaskDebugSessionManager.Batch? = null,
     ) {
-        val followBlockOrientations = resolveTranslationOutputSettings(
+        val translationOutput = resolveTranslationOutputSettings(
             settings.translationOutputFollowRecognition,
             settings.translationOutputLayout,
             settings.translationOutputDirection,
-        ).followRecognition
+        )
+        val followBlockOrientations = translationOutput.followRecognition
+        val delayedLayoutOrientation = TranslationOutputOrientationPolicy.resolve(
+            recognized = orientation,
+            followRecognition = translationOutput.followRecognition,
+            layout = translationOutput.layout,
+            direction = translationOutput.direction,
+        )
         diagId?.let {
             logVerticalDiag(
                 it,
@@ -2588,20 +2736,65 @@ class CaptureService : Service() {
             }
         }
         val loopSession = beginLoopTranslation(diagId)
+        val successfulMaskBlockIndices = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+        val translatedMaskBlockTexts = java.util.concurrent.ConcurrentHashMap<Int, String>()
+        fun recordTranslatedUnit(
+            unit: CrossLineTranslationUnit,
+            translatedText: String,
+        ) {
+            val chunks = reflowCrossLineTranslation(
+                translatedText = translatedText,
+                unit = unit,
+                blocks = blocks,
+                targetLanguageTag = settings.targetLang,
+            )
+            unit.blockIndexes.zip(chunks).forEach { (blockIndex, chunk) ->
+                translatedMaskBlockTexts[blockIndex] = chunk
+            }
+        }
         if (useBatch) {
             launchTranslationBatch(diagId) {
+                var completed = false
                 try {
-                    batchTranslateBlocks(blocks, translationUnits, settings, diagId)
+                    batchTranslateBlocks(
+                        blocks = blocks,
+                        translationUnits = translationUnits,
+                        settings = settings,
+                        diagId = diagId,
+                        onSuccessfulUnit = { unit, translatedText ->
+                            successfulMaskBlockIndices.addAll(unit.blockIndexes)
+                            recordTranslatedUnit(unit, translatedText)
+                        },
+                    )
+                    completed = true
                 } finally {
+                    finishDelayedMaskDebug(
+                        batch = delayedMaskDebugBatch,
+                        successfulBlockIndices = successfulMaskBlockIndices,
+                        translatedBlockTexts = translatedMaskBlockTexts,
+                        outputOrientation = delayedLayoutOrientation,
+                        followBlockOrientations = followBlockOrientations,
+                        completed = completed,
+                        diagId = diagId,
+                    )
                     finishLoopTranslation(diagId, loopSession)
                 }
             }
         } else {
             launchTranslationBatch(diagId) {
+                var completed = false
                 try {
                     translationUnits.mapIndexed { idx, unit ->
                         async {
-                            translateOne(unit.sourceText, settings, diagId, idx) { partial, phase ->
+                            val succeeded = translateOne(
+                                unit.sourceText,
+                                settings,
+                                diagId,
+                                idx,
+                            ) { partial, phase ->
+                                if (phase == AdaptiveTextLayoutPhase.FINAL) {
+                                    recordTranslatedUnit(unit, partial)
+                                }
                                 withContext(Dispatchers.Main) {
                                     updateTranslationUnit(
                                         blocks = blocks,
@@ -2613,11 +2806,113 @@ class CaptureService : Service() {
                                     )
                                 }
                             }
+                            if (succeeded) {
+                                successfulMaskBlockIndices.addAll(unit.blockIndexes)
+                            }
                         }
                     }.awaitAll()
+                    completed = true
                 } finally {
+                    finishDelayedMaskDebug(
+                        batch = delayedMaskDebugBatch,
+                        successfulBlockIndices = successfulMaskBlockIndices,
+                        translatedBlockTexts = translatedMaskBlockTexts,
+                        outputOrientation = delayedLayoutOrientation,
+                        followBlockOrientations = followBlockOrientations,
+                        completed = completed,
+                        diagId = diagId,
+                    )
                     finishLoopTranslation(diagId, loopSession)
                 }
+            }
+        }
+    }
+
+    private suspend fun finishDelayedMaskDebug(
+        batch: MangaDelayedMaskDebugSessionManager.Batch?,
+        successfulBlockIndices: Set<Int>,
+        translatedBlockTexts: Map<Int, String>,
+        outputOrientation: TextOrientation,
+        followBlockOrientations: Boolean,
+        completed: Boolean,
+        diagId: Long?,
+    ) {
+        if (batch == null) return
+        if (!completed) {
+            diagId?.let {
+                logVerticalDiag(
+                    it,
+                    "delayed mask debug discarded reason=translation_batch_cancelled " +
+                        "successful=${successfulBlockIndices.size}/${batch.blockCount}"
+                )
+            }
+            return
+        }
+        runCatching {
+            mangaOcrEngine.finishDelayedMaskDebugBatch(
+                batch = batch,
+                successfulBlockIndices = successfulBlockIndices,
+                translatedBlockTexts = translatedBlockTexts,
+                outputOrientation = outputOrientation,
+                followBlockOrientations = followBlockOrientations,
+                displayPatches = { patches ->
+                    withContext(Dispatchers.Main) {
+                        if (translationBatchGate.accepts(diagId)) {
+                            overlay?.showShapeAwareBubblePatches(
+                                patches = patches,
+                                diagnosticId = diagId,
+                            ) ?: 0
+                        } else {
+                            0
+                        }
+                    }
+                },
+            )
+        }.onSuccess { dump ->
+            val summary = "delayed mask debug complete translated=${dump.translatedBlockCount}/${batch.blockCount} " +
+                "accepted=${dump.result.acceptedBlockCount} fallback=${dump.result.fallbackBlockCount} " +
+                "repairComponents=${dump.repairResult.acceptedComponentCount}/" +
+                "${dump.repairResult.decisions.size} " +
+                "repairFlat=${dump.repairResult.dominantFillComponentCount} " +
+                "repairPixels=${dump.repairResult.repairedPixelCount} " +
+                "repairCrops=${dump.localRepairResult.cropCount} " +
+                "repairWorkingPx=${dump.localRepairResult.totalWorkingPixels} " +
+                "repairMaxCropPx=${dump.localRepairResult.maximumCropPixels} " +
+                "repairWorkRatio=" +
+                String.format(Locale.US, "%.3f", dump.localRepairResult.workingPixelRatio) + " " +
+                "repairMs=${dump.repairDurationMs} " +
+                "shapeLayouts=${dump.shapeLayoutDecisions.count { it.accepted }}/" +
+                "${dump.shapeLayoutDecisions.size} " +
+                "shapeMs=${dump.shapeLayoutDurationMs} " +
+                "shapePatches=${dump.displayedPatchCount}/${dump.shapeAwarePatches.size}"
+            if (diagId != null) logVerticalDiag(diagId, summary) else Timber.i(summary)
+            dump.result.decisions.forEach { decision ->
+                val detail = "delayed mask block=${decision.blockIndex + 1} " +
+                    "accepted=${decision.accepted} reason=${decision.reason.name} " +
+                    "members=${decision.memberIndices} models=${decision.modelBubbleIndices} " +
+                    "core=${decision.selectedCorePixels} output=${decision.outputPixels} " +
+                    "coverage=${String.format(Locale.US, "%.3f", decision.minimumModelCoverage)}"
+                if (diagId != null) logVerticalDiag(diagId, detail) else Timber.i(detail)
+            }
+            dump.repairResult.decisions
+                .filterNot { it.accepted }
+                .groupingBy { it.reason }
+                .eachCount()
+                .forEach { (reason, count) ->
+                    val detail = "delayed repair fallback reason=${reason.name} components=$count"
+                    if (diagId != null) logVerticalDiag(diagId, detail) else Timber.i(detail)
+                }
+            dump.shapeLayoutDecisions.forEach { decision ->
+                val detail = "delayed shape layout model=${decision.modelBubbleIndex} " +
+                    "accepted=${decision.accepted} reason=${decision.reason} " +
+                    "orientation=${decision.orientation.name} fontPx=${decision.fontSizePx} " +
+                    "runs=${decision.runCount} textLength=${decision.textLength}"
+                if (diagId != null) logVerticalDiag(diagId, detail) else Timber.i(detail)
+            }
+        }.onFailure { error ->
+            Timber.w(error, "Unable to finish delayed manga erase mask debug")
+            diagId?.let {
+                logVerticalDiag(error, it, "delayed mask debug failed")
             }
         }
     }
@@ -2626,7 +2921,8 @@ class CaptureService : Service() {
         blocks: List<TextBlock>,
         translationUnits: List<CrossLineTranslationUnit>,
         settings: Settings,
-        diagId: Long? = null
+        diagId: Long? = null,
+        onSuccessfulUnit: (CrossLineTranslationUnit, String) -> Unit = { _, _ -> },
     ) = coroutineScope {
         val sources = translationUnits.map { it.sourceText }
         diagId?.let {
@@ -2661,8 +2957,17 @@ class CaptureService : Service() {
                     initialOutput = update.text,
                     settings = settings,
                     diagId = diagId,
-                    elapsedMs = elapsedSince(translateStartedAt),
+                    elapsedMs = TranslationLogElapsedPolicy.resolve(
+                        developerOptionsEnabled = settings.developerOptionsEnabled,
+                        batchCumulativeCompletionTimeEnabled =
+                            settings.batchCumulativeCompletionTimeEnabled,
+                        itemElapsedMs = update.elapsedMs,
+                        batchElapsedMs = elapsedSince(translateStartedAt),
+                    ),
                     phase = "incremental",
+                    onSuccessful = { finalText ->
+                        onSuccessfulUnit(translationUnits[update.index], finalText)
+                    },
                 )
             }
         }
@@ -2723,8 +3028,15 @@ class CaptureService : Service() {
                 initialOutput = translated.getOrNull(idx),
                 settings = settings,
                 diagId = diagId,
-                elapsedMs = translateElapsedMs,
+                elapsedMs = TranslationLogElapsedPolicy.resolve(
+                    developerOptionsEnabled = settings.developerOptionsEnabled,
+                    batchCumulativeCompletionTimeEnabled =
+                        settings.batchCumulativeCompletionTimeEnabled,
+                    itemElapsedMs = null,
+                    batchElapsedMs = translateElapsedMs,
+                ),
                 phase = "final",
+                onSuccessful = { finalText -> onSuccessfulUnit(unit, finalText) },
             )
         }
     }
@@ -2738,6 +3050,7 @@ class CaptureService : Service() {
         diagId: Long?,
         elapsedMs: Long,
         phase: String,
+        onSuccessful: (String) -> Unit = {},
     ) {
         ensureCurrentTranslationBatch(diagId)
         val src = unit.sourceText
@@ -2769,6 +3082,7 @@ class CaptureService : Service() {
         }
         ensureCurrentTranslationBatch(diagId)
         if (!display.failed) {
+            onSuccessful(finalText)
             logRepository.pair(
                 LogRepository.Category.TRANSLATE,
                 src,
@@ -2843,7 +3157,13 @@ class CaptureService : Service() {
                     initialOutput = update.text,
                     settings = settings,
                     diagId = diagId,
-                    elapsedMs = elapsedSince(translateStartedAt),
+                    elapsedMs = TranslationLogElapsedPolicy.resolve(
+                        developerOptionsEnabled = settings.developerOptionsEnabled,
+                        batchCumulativeCompletionTimeEnabled =
+                            settings.batchCumulativeCompletionTimeEnabled,
+                        itemElapsedMs = update.elapsedMs,
+                        batchElapsedMs = elapsedSince(translateStartedAt),
+                    ),
                     phase = "incremental",
                 )
             }
@@ -2903,7 +3223,13 @@ class CaptureService : Service() {
                 initialOutput = translated.getOrNull(idx),
                 settings = settings,
                 diagId = diagId,
-                elapsedMs = translateElapsedMs,
+                elapsedMs = TranslationLogElapsedPolicy.resolve(
+                    developerOptionsEnabled = settings.developerOptionsEnabled,
+                    batchCumulativeCompletionTimeEnabled =
+                        settings.batchCumulativeCompletionTimeEnabled,
+                    itemElapsedMs = null,
+                    batchElapsedMs = translateElapsedMs,
+                ),
                 phase = "final",
             )
         }
@@ -3038,7 +3364,7 @@ class CaptureService : Service() {
         diagId: Long? = null,
         blockIndex: Int? = null,
         onUpdate: suspend (String, AdaptiveTextLayoutPhase) -> Unit
-    ) {
+    ): Boolean {
         ensureCurrentTranslationBatch(diagId)
         diagId?.let {
             logVerticalDiag(
@@ -3049,6 +3375,7 @@ class CaptureService : Service() {
             )
         }
         val translateStartedAt = System.currentTimeMillis()
+        var succeeded = false
         try {
             if (settings.streamingTranslate) {
                 // 流式：累计 partial 用于落日志（流末尾的 partial 才是完整译文）
@@ -3080,7 +3407,7 @@ class CaptureService : Service() {
                     .collect()
                 ensureCurrentTranslationBatch(diagId)
                 if (streamFailed) {
-                    return
+                    return false
                 }
                 val display = resolveTranslationOutput(
                     initialOutput = lastPartial,
@@ -3095,6 +3422,7 @@ class CaptureService : Service() {
                 onUpdate(display.text, AdaptiveTextLayoutPhase.FINAL)
                 ensureCurrentTranslationBatch(diagId)
                 if (!display.failed) {
+                    succeeded = true
                     diagId?.let {
                         logVerticalDiag(
                             it,
@@ -3143,6 +3471,7 @@ class CaptureService : Service() {
                         elapsedMs = elapsedSince(translateStartedAt),
                     )
                 } else {
+                    succeeded = true
                     logRepository.pair(
                         LogRepository.Category.TRANSLATE,
                         text,
@@ -3182,6 +3511,7 @@ class CaptureService : Service() {
                 elapsedMs = elapsedSince(translateStartedAt)
             )
         }
+        return succeeded
     }
 
     private suspend fun resolveTranslationOutput(
@@ -3509,7 +3839,10 @@ class CaptureService : Service() {
         )
     }
 
-    private suspend fun applyOverlayConfig(settings: Settings) {
+    private suspend fun applyOverlayConfig(
+        settings: Settings,
+        syncFloatingWindowLock: Boolean,
+    ) {
         val typeface = overlayFontManager.typefaceFor(settings)
         val dockEdgeInsetPx = (settings.floatingButtonDockInsetDp * resources.displayMetrics.density).toInt()
         val adaptiveBlocksEnabled =
@@ -3552,7 +3885,10 @@ class CaptureService : Service() {
                 )
                 ocrDebugShowSourceText = settings.ocrRedBoxShowSourceText
                 ocrDebugShowTranslation = settings.ocrRedBoxShowTranslation
-                syncFloatingWindowFromSettings(effectiveOverlaySettings)
+                syncFloatingWindowFromSettings(
+                    effectiveOverlaySettings,
+                    syncLockedState = syncFloatingWindowLock,
+                )
             }
             // Overlay / floating button both own Android Views; keep every visible update on main.
             floatingButton?.let {
@@ -3628,6 +3964,8 @@ class CaptureService : Service() {
         const val ACTION_START = "com.gameocr.app.action.START"
         const val ACTION_STOP = "com.gameocr.app.action.STOP"
         const val ACTION_TRIGGER_ONCE = "com.gameocr.app.action.TRIGGER_ONCE"
+        const val ACTION_RUN_FLOATING_TOUR =
+            "com.gameocr.app.action.RUN_FLOATING_TOUR"
         /** 主屏框选区域时走这条——floating window 模式，绕开 Activity 的横屏 long-edge cutout letterbox。 */
         const val ACTION_PICK_REGION = "com.gameocr.app.action.PICK_REGION"
         const val EXTRA_RESULT_CODE = "extra_result_code"
@@ -3637,6 +3975,11 @@ class CaptureService : Service() {
 
         fun stopIntent(context: Context): Intent =
             Intent(context, CaptureService::class.java).apply { action = ACTION_STOP }
+
+        fun runFloatingTourIntent(context: Context): Intent =
+            Intent(context, CaptureService::class.java).apply {
+                action = ACTION_RUN_FLOATING_TOUR
+            }
     }
 }
 

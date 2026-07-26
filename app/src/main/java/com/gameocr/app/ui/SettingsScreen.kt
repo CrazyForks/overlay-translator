@@ -1,11 +1,8 @@
 package com.gameocr.app.ui
 
-import android.Manifest
 import android.content.Intent
 import android.content.Context
-import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.provider.Settings as AndroidSettings
 import android.text.format.Formatter
 import android.util.TypedValue
@@ -110,6 +107,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
@@ -136,6 +136,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.runtime.DisposableEffect
 import com.gameocr.app.overlay.EdgeInsetPreviewOverlay
@@ -153,7 +154,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -201,6 +201,7 @@ import com.gameocr.app.data.TranslatorEngine
 import com.gameocr.app.data.TtsHttpResponseMode
 import com.gameocr.app.data.TtsProvider
 import com.gameocr.app.data.VolcengineTtsResource
+import com.gameocr.app.data.translationLanguageCodesConflict
 import com.gameocr.app.data.MiniMaxTtsModel
 import com.gameocr.app.data.MimoTtsModel
 import com.gameocr.app.data.DEFAULT_MIMO_TTS_BASE_URL
@@ -498,6 +499,7 @@ fun SettingsScreen(
     var developerOptionsEnabled by remember { mutableStateOf(false) }
     var ocrScreenshotSavingEnabled by remember { mutableStateOf(false) }
     var disableTranslationCache by remember { mutableStateOf(false) }
+    var batchCumulativeCompletionTimeEnabled by remember { mutableStateOf(false) }
     var ocrRedBoxModeEnabled by remember { mutableStateOf(false) }
     var ocrRedBoxShowSourceText by remember { mutableStateOf(true) }
     var ocrRedBoxShowTranslation by remember { mutableStateOf(false) }
@@ -615,7 +617,7 @@ fun SettingsScreen(
     var currentSkill by remember { mutableStateOf(com.gameocr.app.data.FloatingSkill.FULL_SCREEN) }
     var wordSelectPreciseAdjust by remember { mutableStateOf(true) }
     var wordSelectCardMode by remember { mutableStateOf(true) }
-    var wordSelectRememberRegion by remember { mutableStateOf(true) }
+    var wordSelectRememberRegion by remember { mutableStateOf(false) }
     var dictionaryPrompt by remember { mutableStateOf("") }
     // 悬浮按钮"贴边距离" slider 的实时预览：屏幕两侧画 inset 宽度的半透粉条。
     // 默认 false——进设置就显示条带太突兀；用户在 slider 旁手动开启「预览」后才覆盖到屏幕上。
@@ -654,8 +656,8 @@ fun SettingsScreen(
         mutableStateOf(com.gameocr.app.data.PaddleDetectionProfile.FAST)
     }
     var dbnetAdvancedExpanded by remember { mutableStateOf(false) }
-    var showDbnetResetConfirm by remember { mutableStateOf(false) }
     var preprocessExpanded by remember { mutableStateOf(false) }
+    var showDbnetResetConfirm by remember { mutableStateOf(false) }
     var manualTextOrient by remember { mutableStateOf<com.gameocr.app.ocr.TextOrientation?>(null) }
     var translationOutputFollowRecognition by remember { mutableStateOf(true) }
     var translationOutputLayout by remember {
@@ -697,34 +699,8 @@ fun SettingsScreen(
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var showSakuraFallbackDialog by remember { mutableStateOf(false) }
     var pendingModelDownload by remember { mutableStateOf<PendingModelDownload?>(null) }
-    var pendingDownloadAfterNotificationPermission by remember {
-        mutableStateOf<(() -> Unit)?>(null)
-    }
-    val notificationPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) {
-        val pendingDownload = pendingDownloadAfterNotificationPermission
-        pendingDownloadAfterNotificationPermission = null
-        pendingDownload?.invoke()
-    }
-
-    fun continueModelDownloadAfterNotificationPermission(onConfirmed: () -> Unit) {
-        val permissionGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.POST_NOTIFICATIONS,
-            ) == PackageManager.PERMISSION_GRANTED
-        if (shouldRequestModelDownloadNotificationPermission(
-                sdkInt = Build.VERSION.SDK_INT,
-                permissionGranted = permissionGranted,
-            )
-        ) {
-            pendingDownloadAfterNotificationPermission = onConfirmed
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            onConfirmed()
-        }
-    }
+    val continueModelDownloadAfterNotificationPermission =
+        rememberModelDownloadNotificationPermissionGate()
 
     fun requestModelDownload(modelLabel: String, onConfirmed: () -> Unit) {
         val warning = modelDownloadNetworkWarningFor(currentModelDownloadNetworkKind(context))
@@ -806,6 +782,7 @@ fun SettingsScreen(
     }
 
     fun selectMlKitSourceLanguage(languageTag: String) {
+        if (translationLanguageCodesConflict(languageTag, targetLang)) return
         timber.log.Timber.tag("MlKitTrans").i(
             "[select-on-device-source] %s -> %s", sourceLang, languageTag
         )
@@ -897,6 +874,7 @@ fun SettingsScreen(
         developerOptionsEnabled = s.developerOptionsEnabled
         ocrScreenshotSavingEnabled = s.ocrScreenshotSavingEnabled
         disableTranslationCache = s.disableTranslationCache
+        batchCumulativeCompletionTimeEnabled = s.batchCumulativeCompletionTimeEnabled
         ocrRedBoxModeEnabled = s.ocrRedBoxModeEnabled
         ocrRedBoxShowSourceText = s.ocrRedBoxShowSourceText
         ocrRedBoxShowTranslation = s.ocrRedBoxShowTranslation
@@ -1212,6 +1190,7 @@ fun SettingsScreen(
         developerOptionsEnabled = developerOptionsEnabled,
         ocrScreenshotSavingEnabled = ocrScreenshotSavingEnabled,
         disableTranslationCache = disableTranslationCache,
+        batchCumulativeCompletionTimeEnabled = batchCumulativeCompletionTimeEnabled,
         ocrRedBoxModeEnabled = ocrRedBoxModeEnabled,
         ocrRedBoxShowSourceText = ocrRedBoxShowSourceText,
         ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
@@ -1423,6 +1402,7 @@ fun SettingsScreen(
             developerOptionsEnabled = developerOptionsEnabled,
             ocrScreenshotSavingEnabled = ocrScreenshotSavingEnabled,
             disableTranslationCache = disableTranslationCache,
+            batchCumulativeCompletionTimeEnabled = batchCumulativeCompletionTimeEnabled,
             ocrRedBoxModeEnabled = ocrRedBoxModeEnabled,
             ocrRedBoxShowSourceText = ocrRedBoxShowSourceText,
             ocrRedBoxShowTranslation = ocrRedBoxShowTranslation,
@@ -1511,7 +1491,8 @@ fun SettingsScreen(
     }
 
     val modelDownloadBusy = backgroundModelDownloadActive || downloadingPresetId != null ||
-        llmDownloading || paddleDownloading || mangaOcrDownloading || orientationModelDownloading
+        llmDownloading || paddleDownloading || mangaOcrDownloading ||
+        orientationModelDownloading
     val translationPresetSection: @Composable () -> Unit = {
         SectionCard(
             title = stringResource(R.string.settings_section_translation_presets),
@@ -2432,6 +2413,7 @@ fun SettingsScreen(
             developerOptionsEnabled = s.developerOptionsEnabled
             ocrScreenshotSavingEnabled = s.ocrScreenshotSavingEnabled
             disableTranslationCache = s.disableTranslationCache
+            batchCumulativeCompletionTimeEnabled = s.batchCumulativeCompletionTimeEnabled
             ocrRedBoxModeEnabled = s.ocrRedBoxModeEnabled
             ocrRedBoxShowSourceText = s.ocrRedBoxShowSourceText
             ocrRedBoxShowTranslation = s.ocrRedBoxShowTranslation
@@ -2904,6 +2886,8 @@ fun SettingsScreen(
                         badgedLanguageCodes = downloadedMlKitPickerCodes.toSet(),
                         badgeLabel = stringResource(R.string.settings_mlkit_model_downloaded_short),
                         unbadgedStatusLabel = stringResource(R.string.settings_mlkit_model_download_short),
+                        disabledLanguageCodes = setOf(targetLang),
+                        disabledStatusLabel = stringResource(R.string.lang_picker_already_target),
                         onSelect = { languageTag ->
                             selectMlKitSourceLanguage(languageTag)
                             showMlKitMoreLanguages = false
@@ -3452,37 +3436,45 @@ fun SettingsScreen(
                             testRunning = true
                             testMessage = null
                             scope.launch {
-                                val result = viewModel.testTranslator(
-                                    translatorEngine = translatorEngine,
-                                    baseUrl = baseUrl,
-                                    apiKey = apiKey,
-                                    model = model,
-                                    anthropicBaseUrl = anthropicBaseUrl,
-                                    anthropicApiKey = anthropicApiKey,
-                                    anthropicModel = anthropicModel,
-                                    deeplKey = deeplKey,
-                                    deeplPro = deeplPro,
-                                    deeplProtocol = deeplProtocol,
-                                    deeplBaseUrl = deeplBaseUrl,
-                                    deeplBearerAuth = deeplBearerAuth,
-                                    deeplCustomToken = deeplCustomToken,
-                                    youdaoAppKey = youdaoAppKey,
-                                    youdaoAppSecret = youdaoAppSecret,
-                                    apiTimeoutSeconds = apiTimeoutSec.toInt(),
-                                    volcAccessKeyId = volcAk,
-                                    volcSecretAccessKey = volcSk,
-                                    volcRegion = volcRegion,
-                                    baiduFanyiAppId = baiduFanyiAppId,
-                                    baiduFanyiSecretKey = baiduFanyiSecret,
-                                    tencentSecretId = tencentId,
-                                    tencentSecretKey = tencentKey,
-                                    tencentRegion = tencentRegion
-                                )
-                                testRunning = false
-                                testSuccess = result.success
-                                testMessage = result.message
-                                if (result.success && result.models.isNotEmpty()) {
-                                    fetchedModels = result.models
+                                try {
+                                    val result = viewModel.testTranslator(
+                                        translatorEngine = translatorEngine,
+                                        baseUrl = baseUrl,
+                                        apiKey = apiKey,
+                                        model = model,
+                                        anthropicBaseUrl = anthropicBaseUrl,
+                                        anthropicApiKey = anthropicApiKey,
+                                        anthropicModel = anthropicModel,
+                                        deeplKey = deeplKey,
+                                        deeplPro = deeplPro,
+                                        deeplProtocol = deeplProtocol,
+                                        deeplBaseUrl = deeplBaseUrl,
+                                        deeplBearerAuth = deeplBearerAuth,
+                                        deeplCustomToken = deeplCustomToken,
+                                        youdaoAppKey = youdaoAppKey,
+                                        youdaoAppSecret = youdaoAppSecret,
+                                        apiTimeoutSeconds = apiTimeoutSec.toInt(),
+                                        volcAccessKeyId = volcAk,
+                                        volcSecretAccessKey = volcSk,
+                                        volcRegion = volcRegion,
+                                        baiduFanyiAppId = baiduFanyiAppId,
+                                        baiduFanyiSecretKey = baiduFanyiSecret,
+                                        tencentSecretId = tencentId,
+                                        tencentSecretKey = tencentKey,
+                                        tencentRegion = tencentRegion
+                                    )
+                                    testSuccess = result.success
+                                    testMessage = result.message
+                                    if (result.success && result.models.isNotEmpty()) {
+                                        fetchedModels = result.models
+                                    }
+                                } catch (error: CancellationException) {
+                                    throw error
+                                } catch (error: Exception) {
+                                    testSuccess = false
+                                    testMessage = error.message ?: error.javaClass.simpleName
+                                } finally {
+                                    testRunning = false
                                 }
                             }
                         }
@@ -3526,6 +3518,9 @@ fun SettingsScreen(
                     label = stringResource(R.string.settings_source_lang),
                     currentCode = sourceLang,
                     onSelect = {
+                        if (translationLanguageCodesConflict(it, targetLang)) {
+                            return@LanguagePicker
+                        }
                         if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
                             selectMlKitSourceLanguage(it)
                         } else {
@@ -3545,6 +3540,8 @@ fun SettingsScreen(
                     pinned = pinnedLanguages,
                     onTogglePin = onTogglePin,
                     allowAuto = translatorEngine != TranslatorEngine.GOOGLE_ML_KIT,
+                    disabledLanguageCodes = setOf(targetLang),
+                    disabledStatusLabel = stringResource(R.string.lang_picker_already_target),
                     allowedLanguageCodes = if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
                         mlKitLanguagePickerCodes
                     } else {
@@ -3557,6 +3554,9 @@ fun SettingsScreen(
                     label = stringResource(R.string.settings_target_lang),
                     currentCode = targetLang,
                     onSelect = {
+                        if (translationLanguageCodesConflict(sourceLang, it)) {
+                            return@LanguagePicker
+                        }
                         targetLang = it
                         mlKitModelDownloadMessage = null
                         if (
@@ -3568,7 +3568,9 @@ fun SettingsScreen(
                     },
                     pinned = pinnedLanguages,
                     onTogglePin = onTogglePin,
-                    allowAuto = translatorEngine != TranslatorEngine.GOOGLE_ML_KIT,
+                    allowAuto = false,
+                    disabledLanguageCodes = setOf(sourceLang),
+                    disabledStatusLabel = stringResource(R.string.lang_picker_already_source),
                     allowedLanguageCodes = if (translatorEngine == TranslatorEngine.GOOGLE_ML_KIT) {
                         mlKitLanguagePickerCodes
                     } else {
@@ -4395,6 +4397,7 @@ fun SettingsScreen(
 
                 // DBNet post-process tuning is only relevant for PaddleOCR / MangaOCR.
                 if (ocrEngine == OcrEngineKind.PADDLE_ONNX || ocrEngine == OcrEngineKind.MANGA_OCR_JA) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                     val isMangaOcrDbnet = ocrEngine == OcrEngineKind.MANGA_OCR_JA
                     val currentDbnetUnclip = if (isMangaOcrDbnet) mangaOcrDbnetUnclip else dbnetUnclip
                     val defaultSettings = Settings()
@@ -4441,19 +4444,31 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.padding(top = 8.dp),
                     )
-                    FlowRow(
+                    val detectionProfiles =
+                        com.gameocr.app.data.PaddleDetectionProfile.entries
+                    SingleChoiceSegmentedButtonRow(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        com.gameocr.app.data.PaddleDetectionProfile.entries.forEach { profile ->
-                            EngineChip(
-                                current = paddleDetectionProfile,
-                                target = profile,
-                                label = stringResource(profile.labelRes),
-                            ) { selected ->
-                                paddleDetectionProfile = selected
-                                scope.launch { viewModel.savePaddleDetectionProfile(selected) }
-                            }
+                        detectionProfiles.forEachIndexed { index, profile ->
+                            SegmentedButton(
+                                selected = paddleDetectionProfile == profile,
+                                onClick = {
+                                    if (paddleDetectionProfile != profile) {
+                                        paddleDetectionProfile = profile
+                                        scope.launch {
+                                            viewModel.savePaddleDetectionProfile(profile)
+                                        }
+                                    }
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = detectionProfiles.size,
+                                ),
+                                // The default check icon animates its width and shifts the label.
+                                // Keep the connected control, but make selection changes immediate.
+                                icon = {},
+                                label = { Text(stringResource(profile.labelRes)) },
+                            )
                         }
                     }
                     Text(
@@ -4549,37 +4564,44 @@ fun SettingsScreen(
                             }
                         )
                     }
-                    // —— 图像预处理 ——
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { preprocessExpanded = !preprocessExpanded }
-                            .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
+                }
+
+                HorizontalDivider()
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { preprocessExpanded = !preprocessExpanded }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        (if (preprocessExpanded) "▼ " else "▶ ") +
+                            stringResource(R.string.settings_section_preprocess),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                if (preprocessExpanded) {
+                    SwitchRow(
+                        stringResource(R.string.settings_preprocess_upscale),
+                        preUpscale,
+                        helpText = stringResource(R.string.settings_preprocess_upscale_help)
+                    ) { preUpscale = it }
+                    if (cloudOcrUpscaleWarningVisible(ocrEngine, preUpscale)) {
                         Text(
-                            (if (preprocessExpanded) "▼ " else "▶ ") +
-                                stringResource(R.string.settings_section_preprocess),
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary
+                            stringResource(R.string.settings_preprocess_upscale_cloud_warning),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
                         )
                     }
-                    if (preprocessExpanded) {
-                        SwitchRow(
-                            stringResource(R.string.settings_preprocess_upscale),
-                            preUpscale,
-                            helpText = stringResource(R.string.settings_preprocess_upscale_help)
-                        ) { preUpscale = it }
-                        if (cloudOcrUpscaleWarningVisible(ocrEngine, preUpscale)) {
-                            Text(
-                                stringResource(R.string.settings_preprocess_upscale_cloud_warning),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                        }
-                        SwitchRow(stringResource(R.string.settings_preprocess_invert), preInvert) { preInvert = it }
-                        SwitchRow(stringResource(R.string.settings_preprocess_binarize), preBinarize) { preBinarize = it }
-                    }
+                    SwitchRow(
+                        stringResource(R.string.settings_preprocess_invert),
+                        preInvert
+                    ) { preInvert = it }
+                    SwitchRow(
+                        stringResource(R.string.settings_preprocess_binarize),
+                        preBinarize
+                    ) { preBinarize = it }
                 }
                 } // 关闭 OCR section 内的"灰显 Column"（ocrSectionDisabled 控制 alpha）
             }
@@ -4783,28 +4805,39 @@ fun SettingsScreen(
                 val layoutControlsEnabled =
                     manualOverlayLayoutControlsEnabled(overlayStyleMode, renderMode)
                 Text(stringResource(R.string.settings_render_mode_label), style = MaterialTheme.typography.labelLarge)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    EngineChip(renderMode, RenderMode.BLOCKS, stringResource(R.string.settings_render_blocks_chip)) { renderMode = it }
-                    EngineChip(
-                        renderMode,
-                        RenderMode.FLOATING_WINDOW,
-                        stringResource(R.string.settings_render_floating_window_chip),
-                        enabled = layoutControlsEnabled,
-                    ) { renderMode = it }
-                    InlineSwitchLabel(
-                        label = stringResource(R.string.settings_overlay_style_adaptive),
-                        checked = overlayStyleMode == OverlayStyleMode.ADAPTIVE,
-                        enabled = renderMode == RenderMode.BLOCKS,
-                        helpText = stringResource(R.string.settings_overlay_style_adaptive_desc),
-                    ) { enabled ->
-                        overlayStyleMode = if (enabled) {
-                            OverlayStyleMode.ADAPTIVE
-                        } else {
-                            OverlayStyleMode.FIXED
-                        }
+                val renderModeOptions = listOf(
+                    RenderMode.BLOCKS to R.string.settings_render_blocks_chip,
+                    RenderMode.FLOATING_WINDOW to R.string.settings_render_floating_window_chip,
+                )
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    renderModeOptions.forEachIndexed { index, (mode, labelRes) ->
+                        SegmentedButton(
+                            selected = renderMode == mode,
+                            onClick = {
+                                if (renderMode != mode) {
+                                    renderMode = mode
+                                }
+                            },
+                            enabled = mode != RenderMode.FLOATING_WINDOW || layoutControlsEnabled,
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = index,
+                                count = renderModeOptions.size,
+                            ),
+                            icon = {},
+                            label = { Text(stringResource(labelRes)) },
+                        )
+                    }
+                }
+                InlineSwitchLabel(
+                    label = stringResource(R.string.settings_overlay_style_adaptive),
+                    checked = overlayStyleMode == OverlayStyleMode.ADAPTIVE,
+                    enabled = renderMode == RenderMode.BLOCKS,
+                    helpText = stringResource(R.string.settings_overlay_style_adaptive_desc),
+                ) { enabled ->
+                    overlayStyleMode = if (enabled) {
+                        OverlayStyleMode.ADAPTIVE
+                    } else {
+                        OverlayStyleMode.FIXED
                     }
                 }
                 if (!layoutControlsEnabled) {
@@ -4865,20 +4898,29 @@ fun SettingsScreen(
                             modifier = Modifier.padding(start = 4.dp),
                         )
                     }
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        EngineChip(
-                            translationBlockInteractionMode,
-                            TranslationBlockInteractionMode.COPY_BUTTON,
-                            stringResource(R.string.settings_translation_block_interaction_copy_button),
-                        ) { translationBlockInteractionMode = it }
-                        EngineChip(
-                            translationBlockInteractionMode,
-                            TranslationBlockInteractionMode.OPEN_COPY_PANEL,
-                            stringResource(R.string.settings_translation_block_interaction_open_panel),
-                        ) { translationBlockInteractionMode = it }
+                    val translationBlockCopyOptions = listOf(
+                        TranslationBlockInteractionMode.COPY_BUTTON to
+                            R.string.settings_translation_block_interaction_copy_button,
+                        TranslationBlockInteractionMode.OPEN_COPY_PANEL to
+                            R.string.settings_translation_block_interaction_open_panel,
+                    )
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        translationBlockCopyOptions.forEachIndexed { index, (mode, labelRes) ->
+                            SegmentedButton(
+                                selected = translationBlockInteractionMode == mode,
+                                onClick = {
+                                    if (translationBlockInteractionMode != mode) {
+                                        translationBlockInteractionMode = mode
+                                    }
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = translationBlockCopyOptions.size,
+                                ),
+                                icon = {},
+                                label = { Text(stringResource(labelRes)) },
+                            )
+                        }
                     }
                     Text(
                         stringResource(
@@ -4954,13 +4996,31 @@ fun SettingsScreen(
                             stringResource(R.string.settings_merge_strength_label),
                             style = MaterialTheme.typography.labelLarge
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            EngineChip(mergeStrength, com.gameocr.app.data.MergeStrength.CONSERVATIVE,
-                                stringResource(R.string.settings_merge_strength_conservative)) { mergeStrength = it }
-                            EngineChip(mergeStrength, com.gameocr.app.data.MergeStrength.STANDARD,
-                                stringResource(R.string.settings_merge_strength_standard)) { mergeStrength = it }
-                            EngineChip(mergeStrength, com.gameocr.app.data.MergeStrength.AGGRESSIVE,
-                                stringResource(R.string.settings_merge_strength_aggressive)) { mergeStrength = it }
+                        val mergeStrengthOptions = listOf(
+                            com.gameocr.app.data.MergeStrength.CONSERVATIVE to
+                                R.string.settings_merge_strength_conservative,
+                            com.gameocr.app.data.MergeStrength.STANDARD to
+                                R.string.settings_merge_strength_standard,
+                            com.gameocr.app.data.MergeStrength.AGGRESSIVE to
+                                R.string.settings_merge_strength_aggressive,
+                        )
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            mergeStrengthOptions.forEachIndexed { index, (strength, labelRes) ->
+                                SegmentedButton(
+                                    selected = mergeStrength == strength,
+                                    onClick = {
+                                        if (mergeStrength != strength) {
+                                            mergeStrength = strength
+                                        }
+                                    },
+                                    shape = SegmentedButtonDefaults.itemShape(
+                                        index = index,
+                                        count = mergeStrengthOptions.size,
+                                    ),
+                                    icon = {},
+                                    label = { Text(stringResource(labelRes)) },
+                                )
+                            }
                         }
                         Text(
                             stringResource(when (mergeStrength) {
@@ -4986,136 +5046,7 @@ fun SettingsScreen(
             // —— 悬浮按钮 ——
             }
 
-            item(key = SectionKeys.FLOATING) {
-            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_FLOATING) {
-            SectionCard(title = stringResource(R.string.settings_section_floating)) {
-                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_size) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(stringResource(R.string.settings_floating_size_format, floatingSize.toInt()), style = MaterialTheme.typography.labelLarge)
-                Slider(
-                    value = floatingSize,
-                    onValueChange = { floatingSize = it },
-                    valueRange = 32f..96f,
-                    steps = (96 - 32) / 4 - 1
-                )
-                }
-                }
-
-                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_snap) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                SwitchRow(stringResource(R.string.settings_floating_snap_edge_label), floatingSnapEdge) { floatingSnapEdge = it }
-                Text(
-                    stringResource(R.string.settings_floating_snap_edge_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                }
-                }
-
-                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_auto_dock) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                SwitchRow(
-                    stringResource(R.string.settings_floating_auto_dock_label),
-                    floatingAutoDock,
-                    enabled = floatingSnapEdge
-                ) { floatingAutoDock = it }
-                Text(
-                    stringResource(R.string.settings_floating_auto_dock_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
-                )
-                }
-                }
-
-                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_dock_inset) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    stringResource(R.string.settings_floating_dock_inset_format, floatingDockInset.toInt()),
-                    style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
-                )
-                Slider(
-                    value = floatingDockInset,
-                    onValueChange = { floatingDockInset = it },
-                    valueRange = 0f..40f,
-                    steps = 39,
-                    enabled = floatingSnapEdge
-                )
-                OutlinedButton(
-                    onClick = { insetPreviewActive = !insetPreviewActive },
-                    enabled = floatingSnapEdge,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text(stringResource(
-                        if (insetPreviewActive) R.string.settings_floating_dock_inset_preview_stop
-                        else R.string.settings_floating_dock_inset_preview_start
-                    ))
-                }
-                Text(
-                    stringResource(R.string.settings_floating_dock_inset_hint),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
-                )
-                }
-                }
-            }
-
-            // —— 弧菜单按钮顺序 ——
-            }
-
-            }
-
-            item(key = SectionKeys.ARC_MENU) {
-            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_ARC_MENU) {
-            SectionCard(
-                title = stringResource(R.string.settings_section_arc_menu),
-            ) {
-                Text(
-                    stringResource(R.string.settings_arc_menu_page_size, arcMenuPageSize.toInt()),
-                    style = MaterialTheme.typography.labelMedium
-                )
-                Slider(
-                    value = arcMenuPageSize,
-                    onValueChange = { arcMenuPageSize = it.roundToInt().coerceIn(
-                        FloatingMenu.MIN_PAGE_SIZE,
-                        FloatingMenu.MAX_PAGE_SIZE
-                    ).toFloat() },
-                    onValueChangeFinished = {
-                        scope.launch { viewModel.saveArcMenuPageSize(arcMenuPageSize.toInt()) }
-                    },
-                    valueRange = FloatingMenu.MIN_PAGE_SIZE.toFloat()..FloatingMenu.MAX_PAGE_SIZE.toFloat(),
-                    steps = FloatingMenu.MAX_PAGE_SIZE - FloatingMenu.MIN_PAGE_SIZE - 1
-                )
-                Text(
-                    stringResource(R.string.settings_arc_menu_page_size_desc),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    stringResource(
-                        R.string.settings_arc_menu_order_desc,
-                        arcMenuPageSize.toInt()
-                    ),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                ArcMenuOrderEditor(
-                    order = menuOrder,
-                    currentSkill = currentSkill,
-                    onReorder = { next ->
-                        menuOrder = next
-                        scope.launch { viewModel.saveArcMenuOrder(next) }
-                    }
-                )
-            }
-
             // —— 划词翻译 ——
-            }
-
-            }
-
             item(key = SectionKeys.WORD_SELECT) {
             SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_WORD_SELECT) {
             SectionCard(title = stringResource(R.string.settings_section_word_select)) {
@@ -5147,7 +5078,7 @@ fun SettingsScreen(
             }
             }
 
-            // —— 触发器 ——
+            // —— 循环触发器 ——
             item(key = SectionKeys.TRIGGER) {
             SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_TRIGGER) {
             SectionCard(title = stringResource(R.string.settings_section_trigger)) {
@@ -5329,6 +5260,136 @@ fun SettingsScreen(
                 }
             }
 
+            // —— 悬浮按钮 ——
+            }
+
+            }
+
+            item(key = SectionKeys.FLOATING) {
+            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_FLOATING) {
+            SectionCard(title = stringResource(R.string.settings_section_floating)) {
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_size) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(stringResource(R.string.settings_floating_size_format, floatingSize.toInt()), style = MaterialTheme.typography.labelLarge)
+                Slider(
+                    value = floatingSize,
+                    onValueChange = { floatingSize = it },
+                    valueRange = 32f..96f,
+                    steps = (96 - 32) / 4 - 1
+                )
+                }
+                }
+
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_snap) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SwitchRow(stringResource(R.string.settings_floating_snap_edge_label), floatingSnapEdge) { floatingSnapEdge = it }
+                Text(
+                    stringResource(R.string.settings_floating_snap_edge_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                }
+                }
+
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_auto_dock) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                SwitchRow(
+                    stringResource(R.string.settings_floating_auto_dock_label),
+                    floatingAutoDock,
+                    enabled = floatingSnapEdge
+                ) { floatingAutoDock = it }
+                Text(
+                    stringResource(R.string.settings_floating_auto_dock_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
+                )
+                }
+                }
+
+                SettingsSearchTarget(searchTargetRegistry, R.string.settings_search_item_floating_dock_inset) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    stringResource(R.string.settings_floating_dock_inset_format, floatingDockInset.toInt()),
+                    style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
+                )
+                Slider(
+                    value = floatingDockInset,
+                    onValueChange = { floatingDockInset = it },
+                    valueRange = 0f..40f,
+                    steps = 39,
+                    enabled = floatingSnapEdge
+                )
+                OutlinedButton(
+                    onClick = { insetPreviewActive = !insetPreviewActive },
+                    enabled = floatingSnapEdge,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(stringResource(
+                        if (insetPreviewActive) R.string.settings_floating_dock_inset_preview_stop
+                        else R.string.settings_floating_dock_inset_preview_start
+                    ))
+                }
+                Text(
+                    stringResource(R.string.settings_floating_dock_inset_hint),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.alpha(if (floatingSnapEdge) 1f else 0.4f)
+                )
+                }
+                }
+            }
+
+            // —— 弧菜单按钮顺序 ——
+            }
+
+            }
+
+            item(key = SectionKeys.ARC_MENU) {
+            SettingsSearchTarget(searchTargetRegistry, *SEARCH_TARGET_ARC_MENU) {
+            SectionCard(
+                title = stringResource(R.string.settings_section_arc_menu),
+            ) {
+                Text(
+                    stringResource(R.string.settings_arc_menu_page_size, arcMenuPageSize.toInt()),
+                    style = MaterialTheme.typography.labelMedium
+                )
+                Slider(
+                    value = arcMenuPageSize,
+                    onValueChange = { arcMenuPageSize = it.roundToInt().coerceIn(
+                        FloatingMenu.MIN_PAGE_SIZE,
+                        FloatingMenu.MAX_PAGE_SIZE
+                    ).toFloat() },
+                    onValueChangeFinished = {
+                        scope.launch { viewModel.saveArcMenuPageSize(arcMenuPageSize.toInt()) }
+                    },
+                    valueRange = FloatingMenu.MIN_PAGE_SIZE.toFloat()..FloatingMenu.MAX_PAGE_SIZE.toFloat(),
+                    steps = FloatingMenu.MAX_PAGE_SIZE - FloatingMenu.MIN_PAGE_SIZE - 1
+                )
+                Text(
+                    stringResource(R.string.settings_arc_menu_page_size_desc),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    stringResource(
+                        R.string.settings_arc_menu_order_desc,
+                        arcMenuPageSize.toInt()
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                ArcMenuOrderEditor(
+                    order = menuOrder,
+                    currentSkill = currentSkill,
+                    onReorder = { next ->
+                        menuOrder = next
+                        scope.launch { viewModel.saveArcMenuOrder(next) }
+                    }
+                )
+            }
+
             // —— 开发者诊断 ——
             }
 
@@ -5350,10 +5411,14 @@ fun SettingsScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         SwitchRow(
-                            label = stringResource(R.string.settings_ocr_screenshot_saving_label),
-                            checked = ocrScreenshotSavingEnabled,
-                            helpText = stringResource(R.string.settings_ocr_screenshot_saving_hint),
-                        ) { ocrScreenshotSavingEnabled = it }
+                            label = stringResource(
+                                R.string.settings_batch_cumulative_completion_time_label
+                            ),
+                            checked = batchCumulativeCompletionTimeEnabled,
+                            helpText = stringResource(
+                                R.string.settings_batch_cumulative_completion_time_hint
+                            ),
+                        ) { batchCumulativeCompletionTimeEnabled = it }
                         SwitchRow(
                             label = stringResource(R.string.settings_disable_translation_cache_label),
                             checked = disableTranslationCache,
@@ -7451,10 +7516,10 @@ internal val SETTINGS_SECTION_KEYS_IN_ORDER = listOf(
     SectionKeys.OCR,
     SectionKeys.TEXT_ORIENTATION,
     SectionKeys.OVERLAY,
-    SectionKeys.FLOATING,
-    SectionKeys.ARC_MENU,
     SectionKeys.WORD_SELECT,
     SectionKeys.TRIGGER,
+    SectionKeys.FLOATING,
+    SectionKeys.ARC_MENU,
     SectionKeys.DEVELOPER,
     SectionKeys.NETWORK,
 )
@@ -10250,11 +10315,6 @@ private class PendingModelDownload(
     val warning: ModelDownloadNetworkWarning,
     val onConfirmed: () -> Unit,
 )
-
-internal fun shouldRequestModelDownloadNotificationPermission(
-    sdkInt: Int,
-    permissionGranted: Boolean,
-): Boolean = sdkInt >= Build.VERSION_CODES.TIRAMISU && !permissionGranted
 
 internal fun modelDownloadNetworkWarningMessageRes(
     warning: ModelDownloadNetworkWarning,

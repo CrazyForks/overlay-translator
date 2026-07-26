@@ -2,6 +2,7 @@ package com.gameocr.app.ui
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -11,7 +12,7 @@ import java.security.MessageDigest
 class LegalNoticeAssetsTest {
 
     @Test
-    fun packagedLegalFiles_matchRepositorySources() {
+    fun packagedLegalFiles_matchRepositorySourcesByteForByte() {
         data class Case(
             val name: String,
             val repositoryFile: String,
@@ -22,10 +23,10 @@ class LegalNoticeAssetsTest {
             Case("third-party notices", "NOTICE", "third_party_notices.txt"),
             Case("Apache 2.0 license", "LICENSE", "apache_license_2_0.txt"),
         ).forEach { case ->
-            assertEquals(
+            assertArrayEquals(
                 case.name,
-                normalize(repositoryFile(case.repositoryFile).readText()),
-                normalize(moduleFile("src/main/assets/${case.assetFile}").readText()),
+                repositoryFile(case.repositoryFile).readBytes(),
+                moduleFile("src/main/assets/${case.assetFile}").readBytes(),
             )
         }
     }
@@ -60,6 +61,16 @@ class LegalNoticeAssetsTest {
             Case("Shizuku", listOf("Shizuku API", "Copyright (c) 2021 RikkaW")),
             Case("Google transitive runtime", listOf("Android Data Transport", "Firebase Components / Encoders", "JSpecify")),
             Case("bundled Paddle models", listOf("doc_ori.onnx", "textline_ori.onnx", "SHA-256")),
+            Case(
+                "bundled comic bubble detector",
+                listOf(
+                    "detector-v4-s_int8.onnx",
+                    "ogkalu/comic-text-and-bubble-detector",
+                    "RT-DETR-v2",
+                    "Apache License 2.0",
+                    "5FE9E4F576E49D4E7E8B0E029D6D3CDC252ABD4694113E1CAE120E62C931EA79",
+                ),
+            ),
             Case("Hy-MT2", listOf("Hy-MT2-1.8B-GGUF", "Copyright (C) 2026 Tencent", "Apache License 2.0")),
             Case(
                 "Sakura",
@@ -287,6 +298,32 @@ class LegalNoticeAssetsTest {
     }
 
     @Test
+    fun bubbleDetectorNotice_isKeptOutOfTheMangaSettingBlock() {
+        val settingsSource =
+            moduleFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        val englishResources = moduleFile("src/main/res/values/strings.xml").readText()
+        val chineseResources =
+            moduleFile("src/main/res/values-zh-rCN/strings.xml").readText()
+        val notice = moduleFile("src/main/assets/third_party_notices.txt").readText()
+
+        listOf(
+            "settings_bubble_detection_status_bundled",
+            "settings_bubble_detection_source_license",
+        ).forEach { marker ->
+            assertFalse("settings source must not expose $marker", settingsSource.contains(marker))
+            assertFalse("English resources must not expose $marker", englishResources.contains(marker))
+            assertFalse("Chinese resources must not expose $marker", chineseResources.contains(marker))
+        }
+        listOf(
+            "detector-v4-s_int8.onnx",
+            "https://huggingface.co/ogkalu/comic-text-and-bubble-detector",
+            "Apache License 2.0",
+        ).forEach { marker ->
+            assertTrue("third-party notice missing $marker", notice.contains(marker))
+        }
+    }
+
+    @Test
     fun aboutPage_ordersProjectThenLegalThenCommunity() {
         val source = moduleFile("src/main/java/com/gameocr/app/ui/MainScreen.kt").readText()
         val aboutContent = source.substring(
@@ -317,8 +354,6 @@ class LegalNoticeAssetsTest {
             positions.last() > aboutContent.indexOf("R.string.update_btn_check"),
         )
     }
-
-    private fun normalize(text: String): String = text.replace("\r\n", "\n").trimEnd()
 
     private fun moduleFile(path: String): File = listOf(File(path), File("app", path))
         .firstOrNull(File::isFile)
