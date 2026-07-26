@@ -678,7 +678,10 @@ private fun SharePromptDialog(
 
     Dialog(
         onDismissRequest = onDecline,
-        properties = DialogProperties(usePlatformDefaultWidth = false),
+        properties = DialogProperties(
+            dismissOnClickOutside = false,
+            usePlatformDefaultWidth = false,
+        ),
     ) {
         Surface(
             modifier = Modifier

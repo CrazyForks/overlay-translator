@@ -14,6 +14,7 @@ import com.gameocr.app.R
 import com.gameocr.app.data.OcrEngineKind
 import com.gameocr.app.data.PaddleDetectionProfile
 import com.gameocr.app.data.PaddleModelVersion
+import com.gameocr.app.data.adaptiveOverlayActive
 import com.gameocr.app.util.CpuThreadPolicy
 import com.gameocr.app.util.InferenceTiming
 import com.gameocr.app.util.ReusableDirectBufferPool
@@ -263,7 +264,8 @@ class PaddleOcrEngine @Inject constructor(
     @ApplicationContext private val context: Context,
     private val modelInstaller: PaddleModelInstaller,
     private val settingsRepository: com.gameocr.app.data.SettingsRepository,
-    private val logRepository: com.gameocr.app.data.LogRepository
+    private val logRepository: com.gameocr.app.data.LogRepository,
+    private val shapeAwareSessionStore: ShapeAwareBubbleSessionStore,
 ) : OcrEngine {
 
     private val initLock = Mutex()
@@ -285,6 +287,17 @@ class PaddleOcrEngine @Inject constructor(
     override suspend fun recognize(bitmap: Bitmap, kind: OcrEngineKind): List<TextBlock> {
         ensureReady()
         val s = settingsRepository.get()
+        val maskFrameDecision = MangaShapeAwareFramePolicy.decide(
+            shapeAwareRenderingEnabled = adaptiveOverlayActive(
+                s.overlayStyleMode,
+                s.renderMode,
+            ),
+            developerOptionsEnabled = s.developerOptionsEnabled,
+            screenshotSavingEnabled = s.ocrScreenshotSavingEnabled,
+            bubbleDetectorAvailable = MangaBubbleDetectionDebugEngine.isInstalled(context),
+            localSegmentationModelAvailable =
+                MangaBubbleSegmentationDebugEngine.isInstalled(context),
+        )
         return withContext(Dispatchers.Default) {
             runFull(
                 bitmap = bitmap,
@@ -292,6 +305,7 @@ class PaddleOcrEngine @Inject constructor(
                 scoreThresh = s.dbnetBoxScoreThresh,
                 unclipRatio = s.dbnetUnclipRatio,
                 profile = s.paddleDetectionProfile,
+                maskFrameDecision = maskFrameDecision,
             )
         }
     }
@@ -399,12 +413,13 @@ class PaddleOcrEngine @Inject constructor(
         return digest.digest().joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
     }
 
-    private fun runFull(
+    private suspend fun runFull(
         bitmap: Bitmap,
         binThresh: Float = DET_PROB_THRESH,
         scoreThresh: Float = DET_BOX_SCORE_THRESH,
         unclipRatio: Float = DET_UNCLIP_RATIO,
         profile: PaddleDetectionProfile = PaddleDetectionProfile.FAST,
+        maskFrameDecision: MangaShapeAwareFramePolicy.Decision,
     ): List<TextBlock> {
         val runId = runCounter.incrementAndGet()
         val ver = loadedVersion?.name ?: "?"
@@ -425,6 +440,11 @@ class PaddleOcrEngine @Inject constructor(
             REC_MAX_W,
             keys.size,
         )
+        val probabilityMask = if (maskFrameDecision.analyzeFrame) {
+            MangaProbabilityMaskAccumulator(bitmap.width, bitmap.height)
+        } else {
+            null
+        }
         val quads = detectQuadsForRecognition(
             bitmap = bitmap,
             binThresh = binThresh,
@@ -432,6 +452,7 @@ class PaddleOcrEngine @Inject constructor(
             unclipRatio = unclipRatio,
             profile = profile,
             runId = runId,
+            probabilityMask = probabilityMask,
         )
         val tDet = System.currentTimeMillis() - t0
         Timber.i(
@@ -443,6 +464,45 @@ class PaddleOcrEngine @Inject constructor(
             bitmap.width,
             bitmap.height,
         )
+        if (maskFrameDecision.analyzeFrame && probabilityMask != null) {
+            val rects = quads.map { quad ->
+                val bounds = quad.axisAlignedBounds()
+                BubbleClusterer.IntRect(
+                    left = bounds[0].coerceIn(0, bitmap.width),
+                    top = bounds[1].coerceIn(0, bitmap.height),
+                    right = bounds[2].coerceIn(0, bitmap.width),
+                    bottom = bounds[3].coerceIn(0, bitmap.height),
+                )
+            }
+            val bubbles = BubbleClusterer.cluster(
+                rects = rects,
+                imgW = bitmap.width,
+                imgH = bitmap.height,
+                gap = 0,
+                pad = 0,
+            )
+            runCatching {
+                dumpMangaMaskDebugSet(
+                    context = context,
+                    bitmap = bitmap,
+                    quads = quads,
+                    bubbles = bubbles,
+                    probabilityTextMask = probabilityMask.snapshot(),
+                    bubbleClusterGap = 0,
+                    cropPaddingPx = 0,
+                    analyzeFrame = maskFrameDecision.analyzeFrame,
+                    createDelayedSession = maskFrameDecision.createDelayedSession,
+                    useDetectorGuidedPatches =
+                        maskFrameDecision.useDetectorGuidedPatches,
+                    runBoxDetector = maskFrameDecision.runBoxDetector,
+                    runLegacySegmentation = maskFrameDecision.runLegacySegmentation,
+                )
+            }.onSuccess { report ->
+                report?.delayedMaskInput?.let(shapeAwareSessionStore.manager::publish)
+            }.onFailure { error ->
+                Timber.w(error, "Unable to prepare shape-aware Paddle frame")
+            }
+        }
         if (quads.isEmpty()) {
             Timber.i(
                 "PaddleOCR run#%d summary version=%s profile=%s no quads total=%dms",
@@ -521,6 +581,7 @@ class PaddleOcrEngine @Inject constructor(
         unclipRatio: Float,
         profile: PaddleDetectionProfile,
         runId: Long,
+        probabilityMask: MangaProbabilityMaskAccumulator? = null,
     ): List<DBPostprocessor.Quad> {
         val base = detectQuads(
             bitmap = bitmap,
@@ -530,6 +591,18 @@ class PaddleOcrEngine @Inject constructor(
             profile = profile,
             runId = runId,
             passLabel = "full",
+            probabilityMapObserver = probabilityMask?.let { accumulator ->
+                { map, scaleX, scaleY ->
+                    accumulator.merge(
+                        probabilityMap = map,
+                        scaleX = scaleX,
+                        scaleY = scaleY,
+                        offsetX = 0,
+                        offsetY = 0,
+                        threshold = binThresh,
+                    )
+                }
+            },
         )
         if (!MangaOcrTiling.shouldUseTiles(bitmap.width, bitmap.height, profile)) {
             Timber.i(
@@ -557,6 +630,18 @@ class PaddleOcrEngine @Inject constructor(
                     profile = profile,
                     runId = runId,
                     passLabel = "tile[$tile]",
+                    probabilityMapObserver = probabilityMask?.let { accumulator ->
+                        { map, scaleX, scaleY ->
+                            accumulator.merge(
+                                probabilityMap = map,
+                                scaleX = scaleX,
+                                scaleY = scaleY,
+                                offsetX = tile.left,
+                                offsetY = tile.top,
+                                threshold = binThresh,
+                            )
+                        }
+                    },
                 )
                 tiled += tileQuads.map { it.offsetBy(tile.left.toFloat(), tile.top.toFloat()) }
             } finally {
@@ -595,6 +680,11 @@ class PaddleOcrEngine @Inject constructor(
         profile: PaddleDetectionProfile = PaddleDetectionProfile.FAST,
         runId: Long? = null,
         passLabel: String = "full",
+        probabilityMapObserver: ((
+            probabilityMap: Array<FloatArray>,
+            scaleX: Float,
+            scaleY: Float,
+        ) -> Unit)? = null,
     ): List<DBPostprocessor.Quad> {
         val trace = runId?.let { "run#$it " }.orEmpty()
         val detectCallId = detectCallCounter.incrementAndGet()
@@ -699,6 +789,11 @@ class PaddleOcrEngine @Inject constructor(
                             sourceHeight = bitmap.height,
                             outputWidth = outputWidth,
                             outputHeight = outputHeight,
+                        )
+                        probabilityMapObserver?.invoke(
+                            probMap,
+                            outputScale.x,
+                            outputScale.y,
                         )
 
                         val postStartedAtNs = SystemClock.elapsedRealtimeNanos()

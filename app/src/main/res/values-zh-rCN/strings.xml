@@ -524,7 +524,7 @@
     <string name="settings_preprocess_invert">颜色反转 (暗底白字时打开)</string>
     <string name="settings_preprocess_binarize">Otsu 二值化 (复杂背景)</string>
     <string name="settings_overlay_style_adaptive">自动适配画面</string>
-    <string name="settings_overlay_style_adaptive_desc">仅用于紧贴原文：根据每个文字区域自动选择配色、背景和字号。</string>
+    <string name="settings_overlay_style_adaptive_desc">用于紧贴原文的译文块：自动适配配色、背景和字号。使用 PaddleOCR 或日漫 OCR 时，也会对已确认的漫画气泡自动进行形状适配；失败时回退为原有矩形显示。</string>
     <string name="settings_overlay_adaptive_layout_locked">开启后固定为覆盖原文、零偏移、自动换行并关闭避让；关闭后恢复原来的布局设置。</string>
     <string name="settings_overlay_theme_label">译文配色</string>
     <string name="settings_theme_classic_dark">经典深色</string>
@@ -660,7 +660,7 @@
     <string name="settings_batch_cumulative_completion_time_label">批次累计完成时间</string>
     <string name="settings_batch_cumulative_completion_time_hint">开启后，翻译日志显示从整批开始到当前条完成的累计时间；关闭时显示单条或单个原生批组耗时。</string>
     <string name="settings_ocr_screenshot_saving_label">保存 OCR 截图</string>
-    <string name="settings_ocr_screenshot_saving_hint">保存 OCR 使用的截图并关联到运行日志；每个应用进程最多保存 8 张。</string>
+    <string name="settings_ocr_screenshot_saving_hint">保存 OCR 使用的截图并关联到运行日志；使用日漫 OCR 时还会保存 OCR 四边形、文字擦除蒙版和气泡内部蒙版，供原型验证。每个应用进程最多保存 8 张截图和 4 组三层蒙版。</string>
     <string name="settings_disable_translation_cache_label">禁用翻译缓存</string>
     <string name="settings_disable_translation_cache_hint">性能测试时始终执行真实翻译请求，不读取或写入内存译文缓存。</string>
     <string name="settings_ocr_red_box_mode_label">OCR 红框模式</string>
@@ -900,6 +900,8 @@
     <string name="log_msg_loop_on">循环模式开启</string>
     <string name="log_msg_capture_failed">截屏失败：未拿到画面（可能需要重新授权 / Shizuku 不可用）</string>
     <string name="log_msg_capture_frame_dumped_format">OCR 截图已保存：%1$s</string>
+    <string name="log_msg_manga_mask_debug_saved_format">漫画蒙版调试图（%1$s）已保存；气泡通过：%2$d/%3$d</string>
+    <string name="log_msg_manga_mask_debug_diagnostics_format">漫画气泡判定：%1$s</string>
     <string name="log_msg_shizuku_dry_run_failed">Shizuku dry-run 失败——大概率未通过 ADB 配对。已停止截屏服务。</string>
     <string name="log_msg_ocr_failed_format">OCR 识别失败 [%1$s]</string>
     <string name="log_msg_ocr_results_format">识别到 %1$d 段 [%2$s]: %3$s</string>

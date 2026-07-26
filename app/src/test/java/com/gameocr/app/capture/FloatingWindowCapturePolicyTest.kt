@@ -7,6 +7,33 @@ import org.junit.Test
 class FloatingWindowCapturePolicyTest {
 
     @Test
+    fun floatingButton_tableDriven_hidesOnlyDuringLoopCapture() {
+        data class Case(
+            val name: String,
+            val loopMode: Boolean,
+            val buttonShown: Boolean,
+            val expected: Boolean,
+        )
+        val cases = listOf(
+            Case("manual trigger already manages button chrome", false, true, false),
+            Case("loop hides attached floating button", true, true, true),
+            Case("loop without attached button needs no settle wait", true, false, false),
+            Case("manual capture without button needs no action", false, false, false),
+        )
+
+        cases.forEach { case ->
+            assertEquals(
+                case.name,
+                case.expected,
+                shouldHideFloatingButtonForCapture(
+                    loopMode = case.loopMode,
+                    isFloatingButtonShown = case.buttonShown,
+                ),
+            )
+        }
+    }
+
+    @Test
     fun action_tableDriven_keepsLoopFloatingWindowVisible() {
         data class Case(
             val name: String,

@@ -165,6 +165,10 @@ data class Settings(
      * （实测 308 redirect 回 huggingface.co），用户可填自架镜像（如内网 NAS）。空 = 仅走 huggingface.co 原站。
      */
     val mangaOcrModelMirrorUrl: String = "",
+    /**
+     * Uses verified bubble shapes for delayed text erasure, local repair, and translated layout.
+     * Low-confidence regions always fall back to the existing adaptive rectangle renderer.
+     */
     /** PaddleOCR doc-orientation ONNX model mirror. Empty = official HuggingFace source. */
     val orientationModelMirrorUrl: String = "",
     val preferShizukuCapture: Boolean = false,

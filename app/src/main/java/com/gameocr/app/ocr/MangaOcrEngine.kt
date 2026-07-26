@@ -16,8 +16,10 @@ import android.os.Process
 import android.os.SystemClock
 import android.os.Trace
 import com.gameocr.app.R
+import com.gameocr.app.data.LogRepository
 import com.gameocr.app.data.MangaOcrAdvancedSettingsPolicy
 import com.gameocr.app.data.OcrEngineKind
+import com.gameocr.app.data.adaptiveOverlayActive
 import com.gameocr.app.data.dbnetUnclipRatioFor
 import com.gameocr.app.util.CpuThreadPolicy
 import com.gameocr.app.util.DecoderStepTimingSample
@@ -67,7 +69,9 @@ class MangaOcrEngine @Inject constructor(
     @ApplicationContext private val context: Context,
     private val paddle: PaddleOcrEngine,
     private val installer: MangaOcrModelInstaller,
-    private val settingsRepository: com.gameocr.app.data.SettingsRepository
+    private val settingsRepository: com.gameocr.app.data.SettingsRepository,
+    private val logRepository: LogRepository,
+    private val shapeAwareSessionStore: ShapeAwareBubbleSessionStore,
 ) : OcrEngine {
 
     private val initLock = Mutex()
@@ -121,6 +125,50 @@ class MangaOcrEngine @Inject constructor(
         )
         return results
     }
+
+    internal fun claimDelayedMaskDebugBatch(
+        imageWidth: Int,
+        imageHeight: Int,
+        coordinateScale: Float,
+        blocks: List<TextBlock>,
+    ): MangaDelayedMaskDebugSessionManager.Batch? =
+        shapeAwareSessionStore.manager.claim(
+            imageWidth = imageWidth,
+            imageHeight = imageHeight,
+            coordinateScale = coordinateScale,
+            blocks = blocks,
+        )
+
+    internal fun isShapeAwareRenderingEnabled(
+        settings: com.gameocr.app.data.Settings,
+    ): Boolean = MangaShapeAwareFramePolicy.decide(
+        shapeAwareRenderingEnabled = adaptiveOverlayActive(
+            settings.overlayStyleMode,
+            settings.renderMode,
+        ),
+        developerOptionsEnabled = settings.developerOptionsEnabled,
+        screenshotSavingEnabled = false,
+        bubbleDetectorAvailable = MangaBubbleDetectionDebugEngine.isInstalled(context),
+        localSegmentationModelAvailable =
+            MangaBubbleSegmentationDebugEngine.isInstalled(context),
+    ).createDelayedSession
+
+    internal suspend fun finishDelayedMaskDebugBatch(
+        batch: MangaDelayedMaskDebugSessionManager.Batch,
+        successfulBlockIndices: Set<Int>,
+        translatedBlockTexts: Map<Int, String>,
+        outputOrientation: TextOrientation,
+        followBlockOrientations: Boolean,
+        displayPatches: suspend (List<ShapeAwareBubblePatch>) -> Int,
+    ): MangaDelayedMaskDebugSessionManager.Dump =
+        shapeAwareSessionStore.manager.finish(
+            batch = batch,
+            successfulBlockIndices = successfulBlockIndices,
+            translatedBlockTexts = translatedBlockTexts,
+            outputOrientation = outputOrientation,
+            followBlockOrientations = followBlockOrientations,
+            displayPatches = displayPatches,
+        )
 
     suspend fun ensureReady() = initLock.withLock {
         if (encSession != null && decSession != null) return@withLock
@@ -507,12 +555,30 @@ class MangaOcrEngine @Inject constructor(
         )
         // 1) 复用 paddle DBNet 检测 → quads；大图额外走重叠分块，提升整屏小字召回。
         val mangaUnclipRatio = settings.dbnetUnclipRatioFor(OcrEngineKind.MANGA_OCR_JA)
+        val shapeAwareFrameDecision = MangaShapeAwareFramePolicy.decide(
+            shapeAwareRenderingEnabled = adaptiveOverlayActive(
+                settings.overlayStyleMode,
+                settings.renderMode,
+            ),
+            developerOptionsEnabled = settings.developerOptionsEnabled,
+            screenshotSavingEnabled = settings.ocrScreenshotSavingEnabled,
+            bubbleDetectorAvailable =
+                MangaBubbleDetectionDebugEngine.isInstalled(context),
+            localSegmentationModelAvailable =
+                MangaBubbleSegmentationDebugEngine.isInstalled(context),
+        )
+        val probabilityMask = if (shapeAwareFrameDecision.analyzeFrame) {
+            MangaProbabilityMaskAccumulator(bitmap.width, bitmap.height)
+        } else {
+            null
+        }
         val detectStartedAt = SystemClock.elapsedRealtime()
         val quads = traceSection(MangaOcrTracePolicy.sectionName(MangaOcrTraceStage.DETECT)) {
             detectQuadsForManga(
                 bitmap = bitmap,
                 settings = settings,
-                mangaUnclipRatio = mangaUnclipRatio
+                mangaUnclipRatio = mangaUnclipRatio,
+                probabilityMask = probabilityMask,
             )
         }
         val detectMs = InferenceTiming.elapsedMs(detectStartedAt, SystemClock.elapsedRealtime())
@@ -573,6 +639,30 @@ class MangaOcrEngine @Inject constructor(
             settings.mangaOcrCropPaddingPx
         )
         val clusterMs = InferenceTiming.elapsedMs(clusterStartedAt, SystemClock.elapsedRealtime())
+        if (shapeAwareFrameDecision.analyzeFrame && probabilityMask != null) {
+            runCatching {
+                dumpMangaMaskDebugSet(
+                    context = context,
+                    bitmap = bitmap,
+                    quads = quads,
+                    bubbles = bubbles,
+                    probabilityTextMask = probabilityMask.snapshot(),
+                    bubbleClusterGap = bubbleClusterGap,
+                    cropPaddingPx = cropPaddingPx,
+                    analyzeFrame = shapeAwareFrameDecision.analyzeFrame,
+                    createDelayedSession = shapeAwareFrameDecision.createDelayedSession,
+                    useDetectorGuidedPatches =
+                        shapeAwareFrameDecision.useDetectorGuidedPatches,
+                    runBoxDetector = shapeAwareFrameDecision.runBoxDetector,
+                    runLegacySegmentation =
+                        shapeAwareFrameDecision.runLegacySegmentation,
+                )
+            }.onSuccess { report ->
+                report?.delayedMaskInput?.let(shapeAwareSessionStore.manager::publish)
+            }.onFailure { error ->
+                Timber.w(error, "Unable to prepare shape-aware manga frame")
+            }
+        }
         Timber.i(
             "MangaOcr: %d quads -> %d bubbles (profile=%s maxSide=%d tiling=%s gap=%d cropPad=%d dbnet=%.2f/%.2f×%.2f)",
             quads.size,
@@ -686,7 +776,8 @@ class MangaOcrEngine @Inject constructor(
     private suspend fun detectQuadsForManga(
         bitmap: Bitmap,
         settings: com.gameocr.app.data.Settings,
-        mangaUnclipRatio: Float
+        mangaUnclipRatio: Float,
+        probabilityMask: MangaProbabilityMaskAccumulator? = null,
     ): List<DBPostprocessor.Quad> {
         val base = paddle.detectQuads(
             bitmap,
@@ -695,6 +786,18 @@ class MangaOcrEngine @Inject constructor(
             unclipRatio = mangaUnclipRatio,
             profile = settings.paddleDetectionProfile,
             passLabel = "manga-full",
+            probabilityMapObserver = probabilityMask?.let { accumulator ->
+                { map, scaleX, scaleY ->
+                    accumulator.merge(
+                        probabilityMap = map,
+                        scaleX = scaleX,
+                        scaleY = scaleY,
+                        offsetX = 0,
+                        offsetY = 0,
+                        threshold = settings.dbnetProbThresh,
+                    )
+                }
+            },
         )
         if (!MangaOcrTiling.shouldUseTiles(
                 bitmap.width,
@@ -726,6 +829,18 @@ class MangaOcrEngine @Inject constructor(
                     unclipRatio = mangaUnclipRatio,
                     profile = settings.paddleDetectionProfile,
                     passLabel = "manga-tile[$tile]",
+                    probabilityMapObserver = probabilityMask?.let { accumulator ->
+                        { map, scaleX, scaleY ->
+                            accumulator.merge(
+                                probabilityMap = map,
+                                scaleX = scaleX,
+                                scaleY = scaleY,
+                                offsetX = tile.left,
+                                offsetY = tile.top,
+                                threshold = settings.dbnetProbThresh,
+                            )
+                        }
+                    },
                 )
                 tiled += tileQuads.map { it.offsetBy(tile.left.toFloat(), tile.top.toFloat()) }
             } finally {

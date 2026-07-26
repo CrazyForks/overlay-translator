@@ -525,7 +525,7 @@
     <string name="settings_preprocess_invert">Invert colors (for dark bg with light text)</string>
     <string name="settings_preprocess_binarize">Otsu binarize (complex background)</string>
     <string name="settings_overlay_style_adaptive">Adapt to screen</string>
-    <string name="settings_overlay_style_adaptive_desc">For blocks stuck to source text only: derive colors, background, and text size from each text region.</string>
+    <string name="settings_overlay_style_adaptive_desc">For blocks attached to source text: adapt colors, background, and text size. With PaddleOCR or Manga OCR, verified manga bubbles also use shape-aware erasure and layout; failures fall back to the existing rectangle display.</string>
     <string name="settings_overlay_adaptive_layout_locked">When enabled, placement is fixed to overlap with zero offsets, wrapping enabled, and collision avoidance disabled. Turning it off restores the saved layout.</string>
     <string name="settings_overlay_theme_label">Overlay theme</string>
     <string name="settings_theme_classic_dark">Classic dark</string>
@@ -661,7 +661,7 @@
     <string name="settings_batch_cumulative_completion_time_label">Cumulative batch completion time</string>
     <string name="settings_batch_cumulative_completion_time_hint">When enabled, translation logs show elapsed time from the start of the full batch to each completed item. When disabled, they show the individual item or native group duration.</string>
     <string name="settings_ocr_screenshot_saving_label">Save OCR screenshots</string>
-    <string name="settings_ocr_screenshot_saving_hint">Saves the screenshots used by OCR and attaches them to runtime logs. Limited to 8 screenshots per app process.</string>
+    <string name="settings_ocr_screenshot_saving_hint">Saves the screenshots used by OCR and attaches them to runtime logs. Manga OCR also saves OCR quadrilaterals, a text erase mask, and a bubble interior mask for prototype validation. Limited to 8 screenshots and 4 manga mask sets per app process.</string>
     <string name="settings_disable_translation_cache_label">Disable translation cache</string>
     <string name="settings_disable_translation_cache_hint">Always performs a real translation request for performance testing, without reading or writing the in-memory translation cache.</string>
     <string name="settings_ocr_red_box_mode_label">OCR red-box mode</string>
@@ -901,6 +901,8 @@
     <string name="log_msg_loop_on">Loop mode on</string>
     <string name="log_msg_capture_failed">Capture failed: no frame (may need to re-authorize / Shizuku unavailable)</string>
     <string name="log_msg_capture_frame_dumped_format">OCR screenshot saved: %1$s</string>
+    <string name="log_msg_manga_mask_debug_saved_format">Manga mask diagnostic saved (%1$s); accepted bubbles: %2$d/%3$d</string>
+    <string name="log_msg_manga_mask_debug_diagnostics_format">Manga bubble decisions: %1$s</string>
     <string name="log_msg_shizuku_dry_run_failed">Shizuku dry-run failed at service start — likely not paired via ADB. Stopped capture service.</string>
     <string name="log_msg_ocr_failed_format">OCR failed [%1$s]</string>
     <string name="log_msg_ocr_results_format">Recognized %1$d block(s) [%2$s]: %3$s</string>

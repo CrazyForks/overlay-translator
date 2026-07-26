@@ -78,6 +78,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.gameocr.app.R
 import com.gameocr.app.data.Languages
 import com.gameocr.app.ui.LanguagePicker
+import com.gameocr.app.ui.rememberModelDownloadNotificationPermissionGate
 import kotlinx.coroutines.launch
 
 private sealed interface MlKitDownloadState {
@@ -119,6 +120,8 @@ fun OnboardingScreen(
     viewModel: OnboardingViewModel = hiltViewModel(),
 ) {
     val scope = rememberCoroutineScope()
+    val continueModelDownloadAfterNotificationPermission =
+        rememberModelDownloadNotificationPermissionGate()
     var draft by remember { mutableStateOf<OnboardingDraft?>(null) }
     var stepIndex by rememberSaveable { mutableIntStateOf(0) }
     var saving by remember { mutableStateOf(false) }
@@ -130,7 +133,6 @@ fun OnboardingScreen(
     var paddleDownloadState by remember {
         mutableStateOf<PaddleOcrDownloadState>(PaddleOcrDownloadState.Checking)
     }
-
     LaunchedEffect(firstRun) {
         draft = viewModel.loadDraft(firstRun)
     }
@@ -229,6 +231,14 @@ fun OnboardingScreen(
         }
     }
 
+    fun requestPaddleOcrModelDownload() {
+        continueModelDownloadAfterNotificationPermission(::downloadPaddleOcrModel)
+    }
+
+    fun requestMangaOfflineModelsDownload() {
+        continueModelDownloadAfterNotificationPermission(::downloadMangaOfflineModels)
+    }
+
     fun goBack() {
         if (stepIndex > 0) stepIndex--
     }
@@ -323,8 +333,8 @@ fun OnboardingScreen(
                                 }
                             }
                         },
-                        onDownloadPaddleModel = ::downloadPaddleOcrModel,
-                        onDownloadMangaModels = ::downloadMangaOfflineModels,
+                        onDownloadPaddleModel = ::requestPaddleOcrModelDownload,
+                        onDownloadMangaModels = ::requestMangaOfflineModelsDownload,
                         onNext = {
                             if (currentStep == OnboardingStep.SUMMARY) {
                                 saving = true
@@ -367,8 +377,8 @@ fun OnboardingScreen(
                                 }
                             }
                         },
-                        onDownloadPaddleModel = ::downloadPaddleOcrModel,
-                        onDownloadMangaModels = ::downloadMangaOfflineModels,
+                        onDownloadPaddleModel = ::requestPaddleOcrModelDownload,
+                        onDownloadMangaModels = ::requestMangaOfflineModelsDownload,
                         onNext = {
                             if (currentStep == OnboardingStep.SUMMARY) {
                                 saving = true

@@ -98,7 +98,8 @@ class MainScreenShareTest {
             Case("shown flag is persisted", "markSharePromptShown()"),
             Case("prompt becomes visible", "showSharePrompt = true"),
             Case("share uses existing action", "onShareApp()"),
-            Case("back and outside tap decline", "onDismissRequest = onDecline"),
+            Case("back declines", "onDismissRequest = onDecline"),
+            Case("outside tap cannot dismiss", "dismissOnClickOutside = false"),
             Case("same Activity records once", "sharePromptEntryRecorded"),
         ).forEach { case ->
             assertTrue("${case.name} is missing", case.marker in source)
@@ -119,7 +120,7 @@ class MainScreenShareTest {
             ZincCase("shared tour zinc palette", "FloatingMenuTourPalette.colors("),
             ZincCase("zinc border", "BorderStroke(1.dp, borderColor)"),
             ZincCase("custom rounded container", "RoundedCornerShape(20.dp)"),
-            ZincCase("custom dialog width", "DialogProperties(usePlatformDefaultWidth = false)"),
+            ZincCase("custom dialog width", "usePlatformDefaultWidth = false"),
             ZincCase("zinc primary action", "ButtonDefaults.buttonColors("),
             ZincCase("share icon", "Icons.Default.Share"),
         ).forEach { case ->

@@ -1,6 +1,9 @@
 package com.gameocr.app.ui
 
+import com.gameocr.app.download.shouldRequestModelDownloadNotificationPermission
+import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ModelDownloadNotificationPermissionPolicyTest {
@@ -29,6 +32,41 @@ class ModelDownloadNotificationPermissionPolicyTest {
                     sdkInt = case.sdkInt,
                     permissionGranted = case.permissionGranted,
                 ),
+            )
+        }
+    }
+
+    @Test
+    fun modelDownloadEntryPoints_shareNotificationPermissionGate_tableDriven() {
+        data class Case(
+            val name: String,
+            val sourcePath: String,
+            val expectedMarker: String,
+        )
+
+        val cases = listOf(
+            Case(
+                "settings model downloads",
+                "src/main/java/com/gameocr/app/ui/SettingsScreen.kt",
+                "rememberModelDownloadNotificationPermissionGate()",
+            ),
+            Case(
+                "onboarding PaddleOCR download",
+                "src/main/java/com/gameocr/app/onboarding/OnboardingScreen.kt",
+                "continueModelDownloadAfterNotificationPermission(::downloadPaddleOcrModel)",
+            ),
+            Case(
+                "onboarding manga offline download",
+                "src/main/java/com/gameocr/app/onboarding/OnboardingScreen.kt",
+                "continueModelDownloadAfterNotificationPermission(::downloadMangaOfflineModels)",
+            ),
+        )
+
+        cases.forEach { case ->
+            val source = File(case.sourcePath).readText()
+            assertTrue(
+                "${case.name} should use the shared notification permission gate",
+                case.expectedMarker in source,
             )
         }
     }

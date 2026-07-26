@@ -23,6 +23,11 @@ internal fun floatingWindowCaptureAction(
     }
 }
 
+internal fun shouldHideFloatingButtonForCapture(
+    loopMode: Boolean,
+    isFloatingButtonShown: Boolean,
+): Boolean = loopMode && isFloatingButtonShown
+
 internal data class OverlayCaptureRect(
     val left: Int,
     val top: Int,

@@ -141,6 +141,7 @@ class FloatingButtonManager(
     private var layoutParams: WindowManager.LayoutParams? = null
     private var progressView: LoopProgressView? = null
     private var longPressGuideView: LongPressGuideView? = null
+    private var hiddenForCapture: Boolean = false
 
     private var snapAnimX: SpringAnimation? = null
     private var snapAnimY: SpringAnimation? = null
@@ -303,6 +304,7 @@ class FloatingButtonManager(
         wm.addView(container, params)
         view = container
         layoutParams = params
+        if (hiddenForCapture) container.visibility = View.INVISIBLE
         updateAccessibilityDescription()
 
         // 启动时如果开了吸附但上次保存的位置不在边（用户上次拖到中间没吸边），自动吸一下。
@@ -428,6 +430,7 @@ class FloatingButtonManager(
     }
 
     fun hide() {
+        hiddenForCapture = false
         cancelFirstUseTour(markCompleted = false, dismissMenu = false)
         // hide 时若菜单还在 + 球已腾位 → 先把球位「回滚 到 positionBeforeMenu」再保存，不然下次
         // show() 用的 initialX/initialY 会是腾位后的临时位置，球永久跳到屏幕中部。
@@ -457,6 +460,22 @@ class FloatingButtonManager(
             view = null
             layoutParams = null
         }
+    }
+
+    /**
+     * Temporarily removes the button from composition without destroying its position, loop
+     * progress state, or lock state. Must be called on the main thread.
+     */
+    fun setHiddenForCapture(hidden: Boolean): Boolean {
+        val currentView = view
+        if (currentView == null) {
+            hiddenForCapture = false
+            return false
+        }
+        hiddenForCapture = hidden
+        currentView.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
+        arcMenuView?.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
+        return true
     }
 
     private fun setDockSide(side: LiquidFloatingContainer.DockSide) {

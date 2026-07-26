@@ -1,11 +1,8 @@
 package com.gameocr.app.ui
 
-import android.Manifest
 import android.content.Intent
 import android.content.Context
-import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.provider.Settings as AndroidSettings
 import android.text.format.Formatter
 import android.util.TypedValue
@@ -110,6 +107,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
@@ -136,6 +136,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.runtime.DisposableEffect
 import com.gameocr.app.overlay.EdgeInsetPreviewOverlay
@@ -153,7 +154,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -699,34 +699,8 @@ fun SettingsScreen(
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var showSakuraFallbackDialog by remember { mutableStateOf(false) }
     var pendingModelDownload by remember { mutableStateOf<PendingModelDownload?>(null) }
-    var pendingDownloadAfterNotificationPermission by remember {
-        mutableStateOf<(() -> Unit)?>(null)
-    }
-    val notificationPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) {
-        val pendingDownload = pendingDownloadAfterNotificationPermission
-        pendingDownloadAfterNotificationPermission = null
-        pendingDownload?.invoke()
-    }
-
-    fun continueModelDownloadAfterNotificationPermission(onConfirmed: () -> Unit) {
-        val permissionGranted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-            ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.POST_NOTIFICATIONS,
-            ) == PackageManager.PERMISSION_GRANTED
-        if (shouldRequestModelDownloadNotificationPermission(
-                sdkInt = Build.VERSION.SDK_INT,
-                permissionGranted = permissionGranted,
-            )
-        ) {
-            pendingDownloadAfterNotificationPermission = onConfirmed
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        } else {
-            onConfirmed()
-        }
-    }
+    val continueModelDownloadAfterNotificationPermission =
+        rememberModelDownloadNotificationPermissionGate()
 
     fun requestModelDownload(modelLabel: String, onConfirmed: () -> Unit) {
         val warning = modelDownloadNetworkWarningFor(currentModelDownloadNetworkKind(context))
@@ -1517,7 +1491,8 @@ fun SettingsScreen(
     }
 
     val modelDownloadBusy = backgroundModelDownloadActive || downloadingPresetId != null ||
-        llmDownloading || paddleDownloading || mangaOcrDownloading || orientationModelDownloading
+        llmDownloading || paddleDownloading || mangaOcrDownloading ||
+        orientationModelDownloading
     val translationPresetSection: @Composable () -> Unit = {
         SectionCard(
             title = stringResource(R.string.settings_section_translation_presets),
@@ -4422,6 +4397,7 @@ fun SettingsScreen(
 
                 // DBNet post-process tuning is only relevant for PaddleOCR / MangaOCR.
                 if (ocrEngine == OcrEngineKind.PADDLE_ONNX || ocrEngine == OcrEngineKind.MANGA_OCR_JA) {
+                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
                     val isMangaOcrDbnet = ocrEngine == OcrEngineKind.MANGA_OCR_JA
                     val currentDbnetUnclip = if (isMangaOcrDbnet) mangaOcrDbnetUnclip else dbnetUnclip
                     val defaultSettings = Settings()
@@ -4468,19 +4444,31 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.padding(top = 8.dp),
                     )
-                    FlowRow(
+                    val detectionProfiles =
+                        com.gameocr.app.data.PaddleDetectionProfile.entries
+                    SingleChoiceSegmentedButtonRow(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        com.gameocr.app.data.PaddleDetectionProfile.entries.forEach { profile ->
-                            EngineChip(
-                                current = paddleDetectionProfile,
-                                target = profile,
-                                label = stringResource(profile.labelRes),
-                            ) { selected ->
-                                paddleDetectionProfile = selected
-                                scope.launch { viewModel.savePaddleDetectionProfile(selected) }
-                            }
+                        detectionProfiles.forEachIndexed { index, profile ->
+                            SegmentedButton(
+                                selected = paddleDetectionProfile == profile,
+                                onClick = {
+                                    if (paddleDetectionProfile != profile) {
+                                        paddleDetectionProfile = profile
+                                        scope.launch {
+                                            viewModel.savePaddleDetectionProfile(profile)
+                                        }
+                                    }
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = detectionProfiles.size,
+                                ),
+                                // The default check icon animates its width and shifts the label.
+                                // Keep the connected control, but make selection changes immediate.
+                                icon = {},
+                                label = { Text(stringResource(profile.labelRes)) },
+                            )
                         }
                     }
                     Text(
@@ -4817,28 +4805,39 @@ fun SettingsScreen(
                 val layoutControlsEnabled =
                     manualOverlayLayoutControlsEnabled(overlayStyleMode, renderMode)
                 Text(stringResource(R.string.settings_render_mode_label), style = MaterialTheme.typography.labelLarge)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    EngineChip(renderMode, RenderMode.BLOCKS, stringResource(R.string.settings_render_blocks_chip)) { renderMode = it }
-                    EngineChip(
-                        renderMode,
-                        RenderMode.FLOATING_WINDOW,
-                        stringResource(R.string.settings_render_floating_window_chip),
-                        enabled = layoutControlsEnabled,
-                    ) { renderMode = it }
-                    InlineSwitchLabel(
-                        label = stringResource(R.string.settings_overlay_style_adaptive),
-                        checked = overlayStyleMode == OverlayStyleMode.ADAPTIVE,
-                        enabled = renderMode == RenderMode.BLOCKS,
-                        helpText = stringResource(R.string.settings_overlay_style_adaptive_desc),
-                    ) { enabled ->
-                        overlayStyleMode = if (enabled) {
-                            OverlayStyleMode.ADAPTIVE
-                        } else {
-                            OverlayStyleMode.FIXED
-                        }
+                val renderModeOptions = listOf(
+                    RenderMode.BLOCKS to R.string.settings_render_blocks_chip,
+                    RenderMode.FLOATING_WINDOW to R.string.settings_render_floating_window_chip,
+                )
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    renderModeOptions.forEachIndexed { index, (mode, labelRes) ->
+                        SegmentedButton(
+                            selected = renderMode == mode,
+                            onClick = {
+                                if (renderMode != mode) {
+                                    renderMode = mode
+                                }
+                            },
+                            enabled = mode != RenderMode.FLOATING_WINDOW || layoutControlsEnabled,
+                            shape = SegmentedButtonDefaults.itemShape(
+                                index = index,
+                                count = renderModeOptions.size,
+                            ),
+                            icon = {},
+                            label = { Text(stringResource(labelRes)) },
+                        )
+                    }
+                }
+                InlineSwitchLabel(
+                    label = stringResource(R.string.settings_overlay_style_adaptive),
+                    checked = overlayStyleMode == OverlayStyleMode.ADAPTIVE,
+                    enabled = renderMode == RenderMode.BLOCKS,
+                    helpText = stringResource(R.string.settings_overlay_style_adaptive_desc),
+                ) { enabled ->
+                    overlayStyleMode = if (enabled) {
+                        OverlayStyleMode.ADAPTIVE
+                    } else {
+                        OverlayStyleMode.FIXED
                     }
                 }
                 if (!layoutControlsEnabled) {
@@ -4899,20 +4898,29 @@ fun SettingsScreen(
                             modifier = Modifier.padding(start = 4.dp),
                         )
                     }
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        EngineChip(
-                            translationBlockInteractionMode,
-                            TranslationBlockInteractionMode.COPY_BUTTON,
-                            stringResource(R.string.settings_translation_block_interaction_copy_button),
-                        ) { translationBlockInteractionMode = it }
-                        EngineChip(
-                            translationBlockInteractionMode,
-                            TranslationBlockInteractionMode.OPEN_COPY_PANEL,
-                            stringResource(R.string.settings_translation_block_interaction_open_panel),
-                        ) { translationBlockInteractionMode = it }
+                    val translationBlockCopyOptions = listOf(
+                        TranslationBlockInteractionMode.COPY_BUTTON to
+                            R.string.settings_translation_block_interaction_copy_button,
+                        TranslationBlockInteractionMode.OPEN_COPY_PANEL to
+                            R.string.settings_translation_block_interaction_open_panel,
+                    )
+                    SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                        translationBlockCopyOptions.forEachIndexed { index, (mode, labelRes) ->
+                            SegmentedButton(
+                                selected = translationBlockInteractionMode == mode,
+                                onClick = {
+                                    if (translationBlockInteractionMode != mode) {
+                                        translationBlockInteractionMode = mode
+                                    }
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = translationBlockCopyOptions.size,
+                                ),
+                                icon = {},
+                                label = { Text(stringResource(labelRes)) },
+                            )
+                        }
                     }
                     Text(
                         stringResource(
@@ -4988,13 +4996,31 @@ fun SettingsScreen(
                             stringResource(R.string.settings_merge_strength_label),
                             style = MaterialTheme.typography.labelLarge
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            EngineChip(mergeStrength, com.gameocr.app.data.MergeStrength.CONSERVATIVE,
-                                stringResource(R.string.settings_merge_strength_conservative)) { mergeStrength = it }
-                            EngineChip(mergeStrength, com.gameocr.app.data.MergeStrength.STANDARD,
-                                stringResource(R.string.settings_merge_strength_standard)) { mergeStrength = it }
-                            EngineChip(mergeStrength, com.gameocr.app.data.MergeStrength.AGGRESSIVE,
-                                stringResource(R.string.settings_merge_strength_aggressive)) { mergeStrength = it }
+                        val mergeStrengthOptions = listOf(
+                            com.gameocr.app.data.MergeStrength.CONSERVATIVE to
+                                R.string.settings_merge_strength_conservative,
+                            com.gameocr.app.data.MergeStrength.STANDARD to
+                                R.string.settings_merge_strength_standard,
+                            com.gameocr.app.data.MergeStrength.AGGRESSIVE to
+                                R.string.settings_merge_strength_aggressive,
+                        )
+                        SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                            mergeStrengthOptions.forEachIndexed { index, (strength, labelRes) ->
+                                SegmentedButton(
+                                    selected = mergeStrength == strength,
+                                    onClick = {
+                                        if (mergeStrength != strength) {
+                                            mergeStrength = strength
+                                        }
+                                    },
+                                    shape = SegmentedButtonDefaults.itemShape(
+                                        index = index,
+                                        count = mergeStrengthOptions.size,
+                                    ),
+                                    icon = {},
+                                    label = { Text(stringResource(labelRes)) },
+                                )
+                            }
                         }
                         Text(
                             stringResource(when (mergeStrength) {
@@ -5393,11 +5419,6 @@ fun SettingsScreen(
                                 R.string.settings_batch_cumulative_completion_time_hint
                             ),
                         ) { batchCumulativeCompletionTimeEnabled = it }
-                        SwitchRow(
-                            label = stringResource(R.string.settings_ocr_screenshot_saving_label),
-                            checked = ocrScreenshotSavingEnabled,
-                            helpText = stringResource(R.string.settings_ocr_screenshot_saving_hint),
-                        ) { ocrScreenshotSavingEnabled = it }
                         SwitchRow(
                             label = stringResource(R.string.settings_disable_translation_cache_label),
                             checked = disableTranslationCache,
@@ -10294,11 +10315,6 @@ private class PendingModelDownload(
     val warning: ModelDownloadNetworkWarning,
     val onConfirmed: () -> Unit,
 )
-
-internal fun shouldRequestModelDownloadNotificationPermission(
-    sdkInt: Int,
-    permissionGranted: Boolean,
-): Boolean = sdkInt >= Build.VERSION_CODES.TIRAMISU && !permissionGranted
 
 internal fun modelDownloadNetworkWarningMessageRes(
     warning: ModelDownloadNetworkWarning,

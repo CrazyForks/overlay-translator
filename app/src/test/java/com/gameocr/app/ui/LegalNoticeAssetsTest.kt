@@ -60,6 +60,16 @@ class LegalNoticeAssetsTest {
             Case("Shizuku", listOf("Shizuku API", "Copyright (c) 2021 RikkaW")),
             Case("Google transitive runtime", listOf("Android Data Transport", "Firebase Components / Encoders", "JSpecify")),
             Case("bundled Paddle models", listOf("doc_ori.onnx", "textline_ori.onnx", "SHA-256")),
+            Case(
+                "bundled comic bubble detector",
+                listOf(
+                    "detector-v4-s_int8.onnx",
+                    "ogkalu/comic-text-and-bubble-detector",
+                    "RT-DETR-v2",
+                    "Apache License 2.0",
+                    "5FE9E4F576E49D4E7E8B0E029D6D3CDC252ABD4694113E1CAE120E62C931EA79",
+                ),
+            ),
             Case("Hy-MT2", listOf("Hy-MT2-1.8B-GGUF", "Copyright (C) 2026 Tencent", "Apache License 2.0")),
             Case(
                 "Sakura",
@@ -284,6 +294,32 @@ class LegalNoticeAssetsTest {
 
         assertFalse("legal notices must not use local dialog state", aboutSource.contains("showLegalNotices"))
         assertFalse("legal notices must not use a dialog title", aboutSource.contains("licenses_dialog_title"))
+    }
+
+    @Test
+    fun bubbleDetectorNotice_isKeptOutOfTheMangaSettingBlock() {
+        val settingsSource =
+            moduleFile("src/main/java/com/gameocr/app/ui/SettingsScreen.kt").readText()
+        val englishResources = moduleFile("src/main/res/values/strings.xml").readText()
+        val chineseResources =
+            moduleFile("src/main/res/values-zh-rCN/strings.xml").readText()
+        val notice = moduleFile("src/main/assets/third_party_notices.txt").readText()
+
+        listOf(
+            "settings_bubble_detection_status_bundled",
+            "settings_bubble_detection_source_license",
+        ).forEach { marker ->
+            assertFalse("settings source must not expose $marker", settingsSource.contains(marker))
+            assertFalse("English resources must not expose $marker", englishResources.contains(marker))
+            assertFalse("Chinese resources must not expose $marker", chineseResources.contains(marker))
+        }
+        listOf(
+            "detector-v4-s_int8.onnx",
+            "https://huggingface.co/ogkalu/comic-text-and-bubble-detector",
+            "Apache License 2.0",
+        ).forEach { marker ->
+            assertTrue("third-party notice missing $marker", notice.contains(marker))
+        }
     }
 
     @Test
