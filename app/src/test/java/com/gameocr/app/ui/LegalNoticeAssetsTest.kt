@@ -2,6 +2,7 @@ package com.gameocr.app.ui
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -11,7 +12,7 @@ import java.security.MessageDigest
 class LegalNoticeAssetsTest {
 
     @Test
-    fun packagedLegalFiles_matchRepositorySources() {
+    fun packagedLegalFiles_matchRepositorySourcesByteForByte() {
         data class Case(
             val name: String,
             val repositoryFile: String,
@@ -22,10 +23,10 @@ class LegalNoticeAssetsTest {
             Case("third-party notices", "NOTICE", "third_party_notices.txt"),
             Case("Apache 2.0 license", "LICENSE", "apache_license_2_0.txt"),
         ).forEach { case ->
-            assertEquals(
+            assertArrayEquals(
                 case.name,
-                normalize(repositoryFile(case.repositoryFile).readText()),
-                normalize(moduleFile("src/main/assets/${case.assetFile}").readText()),
+                repositoryFile(case.repositoryFile).readBytes(),
+                moduleFile("src/main/assets/${case.assetFile}").readBytes(),
             )
         }
     }
@@ -353,8 +354,6 @@ class LegalNoticeAssetsTest {
             positions.last() > aboutContent.indexOf("R.string.update_btn_check"),
         )
     }
-
-    private fun normalize(text: String): String = text.replace("\r\n", "\n").trimEnd()
 
     private fun moduleFile(path: String): File = listOf(File(path), File("app", path))
         .firstOrNull(File::isFile)

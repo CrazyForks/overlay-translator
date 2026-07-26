@@ -34,7 +34,7 @@ Game / manga / visual novel on screen → tap the floating ball → the translat
 
 ### 🖱️ How to trigger
 
-- **Tap the floating ball**: defaults to translating the whole screen; switchable to **Word-pick mode** — one tap lets you draw a rectangle around just the word or phrase you want translated (more precise)
+- **Tap the floating ball**: defaults to translating the whole screen; in **Word-pick mode**, draw around a word or phrase, then fine-tune the selection and tap **Translate** by default. Disable **Precise adjustment** in Settings to recognize and translate immediately on release
 - **Long-press the floating ball**: opens an arc menu with common actions one finger can reach: loop / re-pick region / switch between **"Translate full screen"** and **"Translate a word"** / quick source-target language switch / preset switch / settings / back to main. **Order and page size are configurable** in settings; extra buttons paginate with a "Next page" button automatically
 - **Loop mode**: choose a fixed interval or wait until dialogue text stabilizes; exact duplicate frames / translations are skipped, and detection can prioritize lower-screen dialogue regions for hands-free story reading
 - **Volume two-key**: hold **Vol+ and Vol−** together for 0.3 s to trigger; your hands stay on the game (requires enabling the bundled accessibility service)
@@ -46,6 +46,7 @@ Game / manga / visual novel on screen → tap the floating ball → the translat
 - **Local HTTP OCR**: connect to Umi-OCR / LunaTranslator services on your LAN or PC
 - **Cloud**: PP-OCRv6 Online (PaddleOCR AI Studio) / Baidu / Tencent / Youdao — fall back to these when on-device OCR misreads; PP-OCRv6 Online requires an AI Studio Access Token
 - When you switch source language, the app checks whether the current OCR engine can read it; if not, it suggests a better one
+- First-run setup matches Japanese, Korean, Chinese, and English with the corresponding OCR; other source languages default to recommending PaddleOCR v5 mobile
 - Optional orientation detection can route horizontal / vertical / rotated text to a better OCR path, or you can lock the direction manually
 - PaddleOCR, manga OCR, and orientation models select 1 / 2 / 4 / 6 CPU inference threads from the device's available cores, capped at 6
 
@@ -53,6 +54,7 @@ Game / manga / visual novel on screen → tap the floating ball → the translat
 
 - **LLMs**: DeepSeek / ChatGPT / Claude / Zhipu / self-hosted services using OpenAI- or Anthropic-compatible connections, with results shown as they arrive
 - **On-device translation**: Google ML Kit works offline after downloading its language packs; Sakura is tuned for Japanese manga and visual novels translated into Simplified Chinese, while Hy-MT2 supports more languages
+- **Language-direction guard**: source and target cannot be set to the same language; conflicting choices are disabled with an explanation in Settings and the floating quick-switch menu
 - **Consistent terminology**: save names, places, organizations, and domain terms globally or per app so LLM and on-device model translations keep preferred wording across scenes
 - **DeepL**: free / Pro plan auto-detected, **supports self-hosted [deeplx](https://github.com/OwO-Network/DeepLX)** (open-source proxy, run on your own server, no key needed); pick between Official / deeplx / Auto-fallback
 - **Youdao Pic-Trans**: skips the OCR step entirely — send the screenshot, get back boxes with translations. Great for comics.
@@ -72,7 +74,8 @@ Game / manga / visual novel on screen → tap the floating ball → the translat
 Not just full-screen translation. Draw a rectangle around a single word or phrase and a card pops up with:
 
 - **Translation** — every engine returns this
-- **Pronunciation / part of speech / multiple definitions / example sentence pairs / difficulty notes** — only when an **LLM engine** is selected; rare words, specialist terms, abbreviations, cultural references, and confusing usages are explained separately (Baidu / Tencent / DeepL etc. only return a plain translation)
+- **Pronunciation / part of speech / inflections / synonyms / multiple definitions / example sentence pairs / difficulty notes** — only when an **LLM engine** is selected; rare words, specialist terms, abbreviations, cultural references, and confusing usages are explained separately (Baidu / Tencent / DeepL etc. only return a plain translation)
+- **Selection workflow** — fine-tune the box and tap **Translate** by default; disable **Precise adjustment** for release-to-translate. **Remember last selection** is off by default
 - A "Copy source" and "Copy translation" button on the card; long-press any text inside to copy too
 - In landscape, the close bar stays pinned at the top and both copy actions stay pinned at the bottom; only the content scrolls, clear of system bars and display cutouts
 - Great for game / manga / VN vocabulary you don't recognize — one second per word, faster than switching to a dictionary app
@@ -80,7 +83,7 @@ Not just full-screen translation. Draw a rectangle around a single word or phras
 ### 🎨 How the overlay looks
 
 - **Two render modes**: glued to each source box (BLOCKS), or packed into a **draggable / resizable floating window** — perfect for games with on-screen joysticks and buttons; you can lock the window to prevent accidental touches
-- **Adapt to screen**: when translations are shown over the original screen, it chooses colors, background, and text size for each text area and places the translation back over the source; turning it off restores the previous display settings
+- **Adapt to screen**: when translations are shown over the original screen, it chooses colors, background, and text size for each area. In comics, the bundled bubble detector can erase source text, repair the local background, and fit horizontal or vertical translations to the detected shape. Low-confidence or failed cases fall back to the existing rectangular renderer, with no separate bubble-model download
 - **Unified layout and reading order**: translated text follows OCR-detected horizontal / vertical layout and reading order by default; when disabled, both the layout and LTR / RTL direction must be selected manually, and OCR sorting uses the same resolved direction as rendering
 - **Selectable translation blocks**: long-press a block for system text selection, or choose tap-to-open panel mode to select a range or copy the full source / translation
 - **5 color themes + visual color picker**: choose background, text, border color, and opacity directly instead of typing ARGB; the picker scrolls on short landscape screens
@@ -92,9 +95,13 @@ Not just full-screen translation. Draw a rectangle around a single word or phras
 ### 🛠️ Small conveniences
 
 - **English / 简体中文 UI + Light / Dark / Follow-system theme**, applies instantly
+- **Step-by-step first-run guide**: choose UI, source and target languages, display style, everyday / manga use, translation method, and TTS one page at a time; cloud LLM setup includes provider, URL, API key, and model fields, while offline choices list required downloads
+- **Interactive floating-ball tour**: after Capture Service is first enabled, it teaches the long-press gesture, every arc-menu action, and menu pagination; **Help** in the home Capture Service card can rerun both setup and the tour
+- **Share with friends**: About can share a feature summary, the official source repository, and the latest download page
+- **Compact setting choices**: detection profile, merge strength, display mode, and translation-block copy behavior switch directly through button groups
 - **In-settings search**: search in either language; new color, font, backup, import, and export settings are indexed too
 - **System presets**: built-in bundles such as "offline Japanese manga OCR → Simplified Chinese" set up recognition, translation, and display in one step; the manga preset uses Adapt to screen by default, and lists any models you still need to download
-- **Background model downloads**: continue after leaving Settings; both the app and system notification show the current model and progress, with cancel, retry, and resume support
+- **Background model downloads**: continue after leaving Settings; Android 13 and later requests notification permission before a download starts, and both the app and system notification show the current model and progress, with cancel, retry, and resume support
 - **Per-app translation context**: detect the foreground app and apply its terminology; package names always stay on-device, and only the display name is sent when you explicitly enable that option for a context-aware translator
 - **Portable settings bundle**: export / import non-sensitive settings, custom presets, and font files in one step; API keys and tokens remain on the current device
 - **Translation cache**: during the current process, identical text with the same translation configuration reuses its result for cloud engines and on-device LLMs
@@ -182,9 +189,9 @@ It is intended for users who want to choose their own recognition, translation, 
 | **Box merge / floating ball** | **Smart loop translation** |
 | <img src="docs/screenshots/settings-floating.png" width="280" alt="Box merge & floating ball settings" /> | <img src="docs/screenshots/settings-loop-translation.png" width="280" alt="Smart loop translation settings" /> |
 
-| **TTS speech settings** |
-|---|
-| <img src="docs/screenshots/settings-tts.png" width="280" alt="TTS engine, system voice, speed, pitch, and test-text settings" /> |
+| **Word-select translation** | **TTS speech settings** |
+|---|---|
+| <img src="docs/screenshots/settings-word-select.png" width="280" alt="Word-select precise adjustment, translation card, and remember-selection settings" /> | <img src="docs/screenshots/settings-tts.png" width="280" alt="TTS engine, system voice, speed, pitch, and test-text settings" /> |
 
 ## 📦 Install
 
@@ -427,7 +434,7 @@ To hear translations aloud, enable TTS in Settings and choose a voice option:
 - **TalkBack**: primary overlay entry points expose readable labels, toggle state, and double-tap / long-press actions; region selection announces state and dimensions, while complex menus are read row by row
 - **Word card**: the top close bar and bottom copy bar stay fixed while the body scrolls; landscape sizing subtracts system bars and cutout insets so actions are not clipped
 - **Crash logs**: in addition to Java exceptions, Android 11+ imports system-reported native crashes, ANRs, low-memory exits, and signal exits; settings snapshots are sanitized and system traces are read with a size limit
-- **Developer diagnostics**: you can save the screenshots used by OCR to investigate missed or incorrect text. This is off by default, saves at most 8 screenshots per app run, and may capture private content. You can also temporarily disable the translation cache so every test translates again
+- **Developer diagnostics**: temporarily disable the translation cache so every test translates again; elapsed time shows per-item translation time by default, with an optional batch-cumulative completion time
 
 ## ⚠️ Known limitations
 
@@ -448,14 +455,14 @@ To hear translations aloud, enable TTS in Settings and choose a voice option:
 | Feature | What users can do |
 |---|---|
 | **Floating translation** | Tap the floating ball over a game, manga, or visual novel and show translations beside the source or in a separate floating window |
-| **Adapt to screen** | Choose translation colors, background, and text size for each area, then place the translation back over the source text |
+| **Adapt to screen** | Choose colors, background, and text size automatically; comic scenes use bundled bubble detection, source-text erasure, local repair, and shape-aware layout with a safe fallback |
 | **Automatic loop** | Translate at a fixed interval or wait for dialogue to finish typing; skip unchanged screens and optionally prioritize lower-screen dialogue boxes |
 | **Multiple OCR choices** | Use on-device ML Kit / PaddleOCR / manga OCR, connect to OCR on your LAN, or use Baidu, Tencent, Youdao, and PP-OCRv6 Online |
 | **Horizontal and vertical text** | Detect rotated, horizontal, and vertical manga text; follow the recognized layout or manually choose layout and reading direction |
 | **Multiple translators** | Use Google ML Kit on-device translation, OpenAI-compatible services, DeepL, Google, Volcengine, Baidu, Tencent, Youdao PicTrans, or offline Sakura / Hy-MT2 models |
 | **Copy translations** | Long-press to select a range, or tap a block to open a panel and copy part of the text, the full source, or the full translation |
 | **Translation speech (TTS)** | Read source text, translations, and word-card content with phone system voices, a self-hosted service, Volcengine, MiniMax, or MiMo; pause / resume, speak selected text, and manage voices |
-| **Word lookup** | Select a word or phrase for a translation; LLM engines can also return pronunciation, part of speech, definitions, examples, and usage notes |
+| **Word lookup** | Select a word or phrase for a translation; LLM engines can also return pronunciation, part of speech, inflections, synonyms, definitions, examples, and usage notes |
 | **Consistent names and terms** | Save global or per-game names, places, and terminology so wording stays consistent across scenes |
 | **Model downloads** | Download on-device models in the background, view progress in the app and notification, cancel, retry, or resume interrupted files |
 | **Faster local translation** | Prepare offline models after capture starts and handle several text blocks together when possible to reduce waiting |
