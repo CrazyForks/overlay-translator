@@ -37,8 +37,8 @@ android {
         applicationId = "com.gameocr.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "0.4.2"
+        versionCode = 16
+        versionName = "0.4.3"
 
         // Controlled local-LLM A/B switch. PP remains device-policy selected (6 on the
         // target 8-core phone); TG can be rebuilt as 4 or 6 without source changes.
@@ -171,6 +171,7 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+    implementation(libs.androidx.exifinterface)
 
     // 物理动画：悬浮球松手吸边用 SpringAnimation
     implementation(libs.androidx.dynamicanimation)

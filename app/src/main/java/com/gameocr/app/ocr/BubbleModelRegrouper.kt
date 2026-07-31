@@ -9,7 +9,8 @@ import kotlin.math.min
  *
  * Members assigned to the same model bubble become one recognition crop. Every unassigned,
  * ambiguous, or otherwise invalid member remains in the existing geometric cluster path. The
- * result is diagnostic-only until the model weights and the full rendering path are approved.
+ * caller validates that the resulting groups form a complete partition of all non-excluded
+ * members before using them for recognition.
  */
 internal object BubbleModelRegrouper {
 
@@ -35,21 +36,47 @@ internal object BubbleModelRegrouper {
         fallbackPadding: Int,
         fallbackGap: Int,
     ): List<Group> {
-        require(width > 0 && height > 0)
-        val associationByMember = arrayOfNulls<BubbleMaskAssociator.Association>(memberBounds.size)
+        val modelByMember = MutableList<Int?>(memberBounds.size) { null }
+        val assigned = BooleanArray(memberBounds.size)
         associations.forEach { association ->
             val memberIndex = association.ocrGroupIndex
             require(memberIndex in memberBounds.indices)
-            require(associationByMember[memberIndex] == null) {
+            require(!assigned[memberIndex]) {
                 "Duplicate association for OCR member $memberIndex"
             }
-            associationByMember[memberIndex] = association
+            assigned[memberIndex] = true
+            modelByMember[memberIndex] = association.modelBubbleIndex
         }
+        return regroupByModelAssignments(
+            width = width,
+            height = height,
+            memberBounds = memberBounds,
+            modelBounds = modelBounds,
+            modelByMember = modelByMember,
+            fallbackPadding = fallbackPadding,
+            fallbackGap = fallbackGap,
+        )
+    }
+
+    fun regroupByModelAssignments(
+        width: Int,
+        height: Int,
+        memberBounds: List<IntRect>,
+        modelBounds: List<IntRect>,
+        modelByMember: List<Int?>,
+        fallbackPadding: Int,
+        fallbackGap: Int,
+        excludedMemberIndices: Set<Int> = emptySet(),
+    ): List<Group> {
+        require(width > 0 && height > 0)
+        require(modelByMember.size == memberBounds.size)
+        require(excludedMemberIndices.all(memberBounds.indices::contains))
 
         val membersByModel = linkedMapOf<Int, MutableList<Int>>()
         val fallbackMemberIndices = mutableListOf<Int>()
         memberBounds.indices.forEach { memberIndex ->
-            val modelIndex = associationByMember[memberIndex]?.modelBubbleIndex
+            if (memberIndex in excludedMemberIndices) return@forEach
+            val modelIndex = modelByMember[memberIndex]
             val usableModelIndex = modelIndex?.takeIf { index ->
                 index in modelBounds.indices && isValid(clamp(modelBounds[index], width, height))
             }

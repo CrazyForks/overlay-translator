@@ -7,10 +7,14 @@ import com.gameocr.app.data.AndroidKeystoreSettingsSecretCipher
 import com.gameocr.app.data.SettingsSecretCipher
 import com.gameocr.app.glossary.TranslationGlossaryDao
 import com.gameocr.app.glossary.TranslationGlossaryDatabase
+import com.gameocr.app.gallery.GalleryTranslationDao
+import com.gameocr.app.gallery.GalleryTranslationDatabase
 import com.gameocr.app.ocr.OcrEngine
 import com.gameocr.app.ocr.RoutingOcrEngine
 import com.gameocr.app.translate.RoutingTranslator
 import com.gameocr.app.translate.TranslationCache
+import com.gameocr.app.translate.TranslationMemoryDao
+import com.gameocr.app.translate.TranslationMemoryDatabase
 import com.gameocr.app.translate.Translator
 import com.gameocr.app.translate.GoogleMlKitTranslationClientFactory
 import com.gameocr.app.translate.GoogleMlKitDownloadedLanguageProvider
@@ -82,6 +86,36 @@ object AppModule {
     fun provideTranslationGlossaryDao(
         database: TranslationGlossaryDatabase,
     ): TranslationGlossaryDao = database.glossaryDao()
+
+    @Provides
+    @Singleton
+    fun provideTranslationMemoryDatabase(
+        @ApplicationContext context: Context,
+    ): TranslationMemoryDatabase = Room.databaseBuilder(
+        context,
+        TranslationMemoryDatabase::class.java,
+        "translation-memory.db",
+    ).build()
+
+    @Provides
+    fun provideTranslationMemoryDao(
+        database: TranslationMemoryDatabase,
+    ): TranslationMemoryDao = database.translationMemoryDao()
+
+    @Provides
+    @Singleton
+    fun provideGalleryTranslationDatabase(
+        @ApplicationContext context: Context,
+    ): GalleryTranslationDatabase = Room.databaseBuilder(
+        context,
+        GalleryTranslationDatabase::class.java,
+        "gallery-translation.db",
+    ).build()
+
+    @Provides
+    fun provideGalleryTranslationDao(
+        database: GalleryTranslationDatabase,
+    ): GalleryTranslationDao = database.galleryTranslationDao()
 }
 
 @Module

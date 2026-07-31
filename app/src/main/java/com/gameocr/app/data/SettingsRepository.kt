@@ -219,6 +219,7 @@ class SettingsRepository @Inject constructor(
         val MangaOcrCropPaddingPx = intPreferencesKey("manga_ocr_crop_padding_px")
         val SharePromptMainEntryCount = intPreferencesKey("share_prompt_main_entry_count")
         val SharePromptShown = booleanPreferencesKey("share_prompt_shown")
+        val MainStatusPresetSeen = booleanPreferencesKey("main_status_preset_seen")
     }
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -284,6 +285,15 @@ class SettingsRepository @Inject constructor(
     suspend fun markSharePromptShown() {
         context.dataStore.edit { prefs ->
             prefs[Keys.SharePromptShown] = true
+        }
+    }
+
+    suspend fun hasSeenMainStatusPreset(): Boolean =
+        context.dataStore.data.first()[Keys.MainStatusPresetSeen] ?: false
+
+    suspend fun markMainStatusPresetSeen() {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.MainStatusPresetSeen] = true
         }
     }
 
@@ -993,7 +1003,8 @@ class SettingsRepository @Inject constructor(
                 ?: default.mangaOcrDbnetUnclipRatio,
             bubbleClusterGap = MangaOcrAdvancedSettingsPolicy.BUBBLE_CLUSTER_GAP,
             mangaOcrCropPaddingPx = MangaOcrAdvancedSettingsPolicy.CROP_PADDING_PX
-            // runtimeTranslationContext is request-scoped and deliberately never persisted.
+            // runtimeTranslationContext, runtimeTranslationScopePackage, and
+            // runtimeTranslationScopeLabel are request-scoped and deliberately never persisted.
         ))
     }
 }

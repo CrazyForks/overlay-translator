@@ -16,6 +16,8 @@ class DetectorGuidedBubbleMaskExtractorTest {
             val draw: (IntArray, Int, Int) -> Unit,
             val expectedAccepted: Boolean,
             val expectedReason: String,
+            val expectedMemberAssignment: Int?,
+            val expectedAttempts: Int,
         )
         val cases = listOf(
             Case(
@@ -26,9 +28,22 @@ class DetectorGuidedBubbleMaskExtractorTest {
                 },
                 expectedAccepted = true,
                 expectedReason = "accepted",
+                expectedMemberAssignment = 0,
+                expectedAttempts = 1,
             ),
             Case(
-                name = "open ellipse",
+                name = "tight detector retries with expanded roi",
+                detection = detection(32f, 28f, 88f, 72f),
+                draw = { pixels, width, height ->
+                    drawEllipse(pixels, width, height, 60, 50, 34, 24)
+                },
+                expectedAccepted = true,
+                expectedReason = "accepted_after_roi_expand",
+                expectedMemberAssignment = 0,
+                expectedAttempts = 2,
+            ),
+            Case(
+                name = "open detected bubble uses ellipse fallback",
                 detection = detection(20f, 18f, 100f, 82f),
                 draw = { pixels, width, height ->
                     drawEllipse(
@@ -43,8 +58,10 @@ class DetectorGuidedBubbleMaskExtractorTest {
                         gapToY = 62,
                     )
                 },
-                expectedAccepted = false,
-                expectedReason = "region_leaked_to_roi",
+                expectedAccepted = true,
+                expectedReason = "accepted_ellipse_fallback",
+                expectedMemberAssignment = 0,
+                expectedAttempts = 2,
             ),
             Case(
                 name = "detector without ocr member",
@@ -52,6 +69,8 @@ class DetectorGuidedBubbleMaskExtractorTest {
                 draw = { _, _, _ -> },
                 expectedAccepted = false,
                 expectedReason = "detector_no_ocr_members",
+                expectedMemberAssignment = null,
+                expectedAttempts = 1,
             ),
         )
 
@@ -71,7 +90,16 @@ class DetectorGuidedBubbleMaskExtractorTest {
 
             assertEquals(case.name, case.expectedAccepted, result.decisions.single().accepted)
             assertEquals(case.name, case.expectedReason, result.decisions.single().diagnostic.reason)
-            assertEquals(case.name, 1, result.decisions.single().diagnostic.attempts)
+            assertEquals(
+                case.name,
+                listOf(case.expectedMemberAssignment),
+                result.memberDetectionIndices,
+            )
+            assertEquals(
+                case.name,
+                case.expectedAttempts,
+                result.decisions.single().diagnostic.attempts,
+            )
             assertEquals(
                 case.name,
                 case.expectedAccepted,
@@ -81,6 +109,60 @@ class DetectorGuidedBubbleMaskExtractorTest {
                 assertTrue(case.name, result.instanceMasks.single().contains(60, 50))
                 assertFalse(case.name, result.instanceMasks.single().contains(5, 5))
             }
+        }
+    }
+
+    @Test
+    fun extract_tableDriven_ellipseFallbackRejectsUnsafeCandidates() {
+        data class Case(
+            val name: String,
+            val pixels: IntArray,
+            val polygon: MangaMaskDebugAnalyzer.Polygon,
+            val expectedReason: String,
+        )
+
+        val width = 120
+        val height = 100
+        val openOutline = IntArray(width * height) { WHITE }.also { pixels ->
+            drawEllipse(
+                pixels = pixels,
+                width = width,
+                height = height,
+                centerX = 60,
+                centerY = 50,
+                radiusX = 34,
+                radiusY = 24,
+                gapFromY = 38,
+                gapToY = 62,
+            )
+        }
+        val cases = listOf(
+            Case(
+                name = "member at detector corner is outside fallback ellipse",
+                pixels = openOutline,
+                polygon = rectanglePolygon(20f, 18f, 44f, 42f),
+                expectedReason = "region_leaked_to_roi",
+            ),
+            Case(
+                name = "dark candidate never becomes an ellipse",
+                pixels = IntArray(width * height) { DARK },
+                polygon = rectanglePolygon(48f, 38f, 72f, 62f),
+                expectedReason = "background_too_dark",
+            ),
+        )
+
+        cases.forEach { case ->
+            val result = DetectorGuidedBubbleMaskExtractor.extract(
+                width = width,
+                height = height,
+                argb = case.pixels,
+                polygons = listOf(case.polygon),
+                boxDetections = listOf(detection(20f, 18f, 100f, 82f)),
+            )
+
+            assertFalse(case.name, result.decisions.single().accepted)
+            assertEquals(case.name, case.expectedReason, result.decisions.single().diagnostic.reason)
+            assertFalse(case.name, result.instanceMasks.single().pixels.any { it })
         }
     }
 
@@ -107,6 +189,7 @@ class DetectorGuidedBubbleMaskExtractorTest {
 
         assertEquals(listOf(0), result.decisions[0].memberIndices)
         assertEquals(listOf(1), result.decisions[1].memberIndices)
+        assertEquals(listOf(0, 1), result.memberDetectionIndices)
         assertEquals(2, result.acceptedCount)
         assertTrue(result.durationMs >= 0L)
     }
@@ -177,5 +260,6 @@ class DetectorGuidedBubbleMaskExtractorTest {
     private companion object {
         const val WHITE = 0xFFFFFFFF.toInt()
         const val BLACK = 0xFF000000.toInt()
+        const val DARK = 0xFF202020.toInt()
     }
 }

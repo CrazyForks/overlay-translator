@@ -605,7 +605,7 @@ class MangaOcrEngine @Inject constructor(
         // 2) quad → IntRect → 气泡聚类（用 BubbleClusterer.IntRect 而非 android.graphics.Rect，
         //    后者在 JVM 单测里是 Stub 不能直接构造）
         val clusterStartedAt = SystemClock.elapsedRealtime()
-        val (rects, bubbles) = traceSection(
+        val (rects, legacyBubbles) = traceSection(
             MangaOcrTracePolicy.sectionName(MangaOcrTraceStage.CLUSTER)
         ) {
             val clusteredRects = quads.map { quad ->
@@ -639,13 +639,14 @@ class MangaOcrEngine @Inject constructor(
             settings.mangaOcrCropPaddingPx
         )
         val clusterMs = InferenceTiming.elapsedMs(clusterStartedAt, SystemClock.elapsedRealtime())
+        var shapeAwareReport: MangaMaskDebugReport? = null
         if (shapeAwareFrameDecision.analyzeFrame && probabilityMask != null) {
             runCatching {
                 dumpMangaMaskDebugSet(
                     context = context,
                     bitmap = bitmap,
                     quads = quads,
-                    bubbles = bubbles,
+                    bubbles = legacyBubbles,
                     probabilityTextMask = probabilityMask.snapshot(),
                     bubbleClusterGap = bubbleClusterGap,
                     cropPaddingPx = cropPaddingPx,
@@ -658,11 +659,52 @@ class MangaOcrEngine @Inject constructor(
                         shapeAwareFrameDecision.runLegacySegmentation,
                 )
             }.onSuccess { report ->
+                shapeAwareReport = report
                 report?.delayedMaskInput?.let(shapeAwareSessionStore.manager::publish)
             }.onFailure { error ->
                 Timber.w(error, "Unable to prepare shape-aware manga frame")
             }
         }
+        val bubbleSelection = MangaOcrBubbleGroupingPolicy.select(
+            legacyBubbles = legacyBubbles,
+            guidedGroups = shapeAwareReport?.detectorGuidedRegroupedGroups.orEmpty(),
+            memberCount = rects.size,
+            enabled = shapeAwareFrameDecision.useDetectorGuidedPatches,
+            excludedMemberIndices =
+                shapeAwareReport?.detectorGuidedExcludedMemberIndices.orEmpty(),
+        )
+        val textEvidenceResult = MangaOcrTextEvidencePolicy.filter(
+            entries = bubbleSelection.entries,
+            textDetections = shapeAwareReport?.boxDetection?.textDetections.orEmpty(),
+            evidenceAvailable = shapeAwareReport?.boxDetection != null,
+        )
+        val selectedEntries = textEvidenceResult.entries
+        val bubbles = selectedEntries.map(MangaOcrBubbleGroupingPolicy.Entry::bubble)
+        val splitByTextBandBubbleIndices = selectedEntries.mapIndexedNotNull { index, entry ->
+            index.takeIf {
+                entry.guidedSource == BubbleModelRegrouper.Source.LEGACY_FALLBACK &&
+                    index !in textEvidenceResult.textSupportedEntryIndices
+            }
+        }.toSet()
+        Timber.i(
+            "MangaOcr grouping source=%s legacy=%d selected=%d guided=%d excluded=%s droppedUnsupported=%s textSupported=%s splitFallback=%s",
+            bubbleSelection.source,
+            legacyBubbles.size,
+            bubbles.size,
+            shapeAwareReport?.detectorGuidedRegroupedGroups?.size ?: 0,
+            shapeAwareReport?.detectorGuidedExcludedMemberIndices.orEmpty(),
+            textEvidenceResult.droppedIndices,
+            textEvidenceResult.textSupportedEntryIndices,
+            splitByTextBandBubbleIndices,
+        )
+        Timber.i(
+            "MangaOcr evidence assignments=%s unassignedTextBubble=%s duplicateCrops=%s",
+            textEvidenceResult.assignments.map { assignment ->
+                "${assignment.detectionIndex}->${assignment.entryIndex}"
+            },
+            textEvidenceResult.unassignedTextBubbleDetectionIndices,
+            textEvidenceResult.duplicateCropEntryIndices,
+        )
         Timber.i(
             "MangaOcr: %d quads -> %d bubbles (profile=%s maxSide=%d tiling=%s gap=%d cropPad=%d dbnet=%.2f/%.2f×%.2f)",
             quads.size,
@@ -676,19 +718,42 @@ class MangaOcrEngine @Inject constructor(
         )
 
         // 3) 每气泡裁切 + 推理
+        val cropPlans = MangaOcrCropPlanner.plan(
+            bubbles = bubbles,
+            rects = rects,
+            imageWidth = bitmap.width,
+            imageHeight = bitmap.height,
+            padding = cropPaddingPx,
+            splitByTextBandBubbleIndices = splitByTextBandBubbleIndices,
+        )
+        cropPlans
+            .groupBy(MangaOcrCropPlan::sourceBubbleIndex)
+            .filterValues { plans -> plans.size > 1 }
+            .forEach { (bubbleIndex, plans) ->
+                Timber.i(
+                    "MangaOcr split bubble[%d] members=%d into=%d maxBands=%d cropMembers=%s",
+                    bubbleIndex,
+                    bubbles[bubbleIndex].memberIndices.size,
+                    plans.size,
+                    MangaOcrCropPlanner.MAX_TEXT_BANDS_PER_CROP,
+                    plans.map { plan -> plan.bubble.memberIndices.size },
+                )
+            }
+
         val bubblesStartedAt = SystemClock.elapsedRealtime()
-        val results = mutableListOf<TextBlock>()
-        for ((i, bubble) in bubbles.withIndex()) {
+        val recognizedChunks = Array(bubbles.size) { mutableListOf<String>() }
+        for ((planIndex, plan) in cropPlans.withIndex()) {
             coroutineContext.ensureActive()
+            val bubble = plan.bubble
             val crop = cropBubble(bitmap, bubble.rect) ?: continue
             val bubbleStartedAt = SystemClock.elapsedRealtime()
             val cropWidth = crop.width
             val cropHeight = crop.height
             val recognition = try {
                 traceSection(
-                    MangaOcrTracePolicy.sectionName(MangaOcrTraceStage.BUBBLE, i)
+                    MangaOcrTracePolicy.sectionName(MangaOcrTraceStage.BUBBLE, planIndex)
                 ) {
-                    recognizeBubble(crop, i)
+                    recognizeBubble(crop, planIndex)
                 }
             } finally {
                 crop.recycle()
@@ -696,8 +761,10 @@ class MangaOcrEngine @Inject constructor(
             val text = recognition.text.trim()
             val memberRects = bubble.memberIndices.mapNotNull(rects::getOrNull)
             Timber.tag(PERF_TAG).i(
-                "bubble index=%d totalMs=%d encoderMs=%d decoderMs=%d decoderSteps=%d crop=%dx%d chars=%d",
-                i,
+                "bubble index=%d crop=%d/%d totalMs=%d encoderMs=%d decoderMs=%d decoderSteps=%d crop=%dx%d chars=%d",
+                plan.sourceBubbleIndex,
+                plan.cropIndex + 1,
+                plan.cropCount,
                 InferenceTiming.elapsedMs(bubbleStartedAt, SystemClock.elapsedRealtime()),
                 recognition.encoder.totalMs,
                 recognition.decoder.totalMs,
@@ -706,11 +773,15 @@ class MangaOcrEngine @Inject constructor(
                 cropHeight,
                 text.length,
             )
-            logEncoderDetail("bubble[$i]", recognition.encoder, cropWidth, cropHeight)
-            logDecoderDetail("bubble[$i]", recognition.decoder)
+            val detailLabel =
+                "bubble[${plan.sourceBubbleIndex}] crop[${plan.cropIndex + 1}/${plan.cropCount}]"
+            logEncoderDetail(detailLabel, recognition.encoder, cropWidth, cropHeight)
+            logDecoderDetail(detailLabel, recognition.decoder)
             Timber.i(
-                "MangaOcr bub[%d] content=%s crop=%s cropPad=%d members=%d memberRects=%s -> '%s' (%d chars)",
-                i,
+                "MangaOcr bub[%d] crop=%d/%d content=%s rect=%s cropPad=%d members=%d memberRects=%s -> '%s' (%d chars)",
+                plan.sourceBubbleIndex,
+                plan.cropIndex + 1,
+                plan.cropCount,
                 bubble.contentRect,
                 bubble.rect,
                 cropPaddingPx,
@@ -721,9 +792,24 @@ class MangaOcrEngine @Inject constructor(
             )
             if (text.isEmpty()) continue
             if (shouldDropMangaOcrEdgeNoise(text, bubble.rect, bitmap.width, bitmap.height)) {
-                Timber.i("MangaOcr drop edge noise bub[%d] %s -> '%s'", i, bubble.rect, text)
+                Timber.i(
+                    "MangaOcr drop edge noise bub[%d] crop=%d/%d %s -> '%s'",
+                    plan.sourceBubbleIndex,
+                    plan.cropIndex + 1,
+                    plan.cropCount,
+                    bubble.rect,
+                    text,
+                )
                 continue
             }
+            recognizedChunks[plan.sourceBubbleIndex] += text
+        }
+
+        val results = mutableListOf<TextBlock>()
+        for ((bubbleIndex, bubble) in bubbles.withIndex()) {
+            val text = recognizedChunks[bubbleIndex].joinToString(separator = "").trim()
+            if (text.isEmpty()) continue
+            val memberRects = bubble.memberIndices.mapNotNull(rects::getOrNull)
             val sourceBoxes = memberRects.map { rect ->
                 Rect(rect.left, rect.top, rect.right, rect.bottom)
             }
@@ -747,7 +833,7 @@ class MangaOcrEngine @Inject constructor(
         }
         val bubblesMs = InferenceTiming.elapsedMs(bubblesStartedAt, SystemClock.elapsedRealtime())
         Timber.tag(PERF_TAG).i(
-            "run profile=%s maxSide=%d tiling=%s cropPad=%d totalMs=%d detectMs=%d clusterMs=%d bubblesMs=%d bitmap=%dx%d quads=%d bubbles=%d blocks=%d",
+            "run profile=%s maxSide=%d tiling=%s cropPad=%d totalMs=%d detectMs=%d clusterMs=%d bubblesMs=%d bitmap=%dx%d quads=%d bubbles=%d crops=%d blocks=%d",
             settings.paddleDetectionProfile.name,
             settings.paddleDetectionProfile.maxSideLen,
             settings.paddleDetectionProfile.enableMangaTiling,
@@ -760,6 +846,7 @@ class MangaOcrEngine @Inject constructor(
             bitmap.height,
             quads.size,
             bubbles.size,
+            cropPlans.size,
             results.size,
         )
         logRuntimeDetail(

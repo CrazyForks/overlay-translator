@@ -17,6 +17,7 @@ import android.os.IBinder
 import android.os.SystemClock
 import android.view.Surface
 import android.view.WindowManager
+import android.widget.Toast
 import androidx.core.app.ServiceCompat
 import com.gameocr.app.R
 import com.gameocr.app.capture.CaptureCoordinateRelation
@@ -69,6 +70,9 @@ import com.gameocr.app.data.TranslationPresetCatalog
 import com.gameocr.app.data.translationLanguageCodesConflict
 import com.gameocr.app.data.needsRawBitmap
 import com.gameocr.app.data.Languages
+import com.gameocr.app.glossary.GlossaryTermCategory
+import com.gameocr.app.glossary.GlossaryTermEntity
+import com.gameocr.app.glossary.TranslationGlossaryRepository
 import com.gameocr.app.ocr.BitmapPreprocessor
 import com.gameocr.app.ocr.MangaOcrEngine
 import com.gameocr.app.ocr.MangaDelayedMaskDebugSessionManager
@@ -102,6 +106,9 @@ import com.gameocr.app.overlay.PresetQuickSwitchOverlay
 import com.gameocr.app.overlay.RegionPickerOverlay
 import com.gameocr.app.overlay.TranslationBlockCopyOverlay
 import com.gameocr.app.overlay.TranslationCardOverlay
+import com.gameocr.app.overlay.TranslationCorrectionDraft
+import com.gameocr.app.overlay.TranslationCorrectionOverlay
+import com.gameocr.app.overlay.TranslationCorrectionRequest
 import com.gameocr.app.overlay.TtsPlaybackAction
 import com.gameocr.app.overlay.WordSelectOverlay
 import com.gameocr.app.ui.MainActivity
@@ -109,6 +116,7 @@ import com.gameocr.app.translate.BatchTranslationProgressState
 import com.gameocr.app.translate.BatchTranslationUpdate
 import com.gameocr.app.translate.CrossLineTranslationUnit
 import com.gameocr.app.translate.TranslationException
+import com.gameocr.app.translate.TranslationMemoryService
 import com.gameocr.app.translate.Translator
 import com.gameocr.app.translate.RoutingTranslator
 import com.gameocr.app.translate.individualTranslationUnits
@@ -206,6 +214,8 @@ class CaptureService : Service() {
     @Inject lateinit var mangaOcrModelInstaller: MangaOcrModelInstaller
     @Inject lateinit var mangaOcrEngine: MangaOcrEngine
     @Inject lateinit var ttsEngine: TtsEngine
+    @Inject lateinit var translationMemoryService: TranslationMemoryService
+    @Inject lateinit var translationGlossaryRepository: TranslationGlossaryRepository
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val mainScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -222,6 +232,7 @@ class CaptureService : Service() {
     private var wordSelect: WordSelectOverlay? = null
     private var translationCard: TranslationCardOverlay? = null
     private var translationBlockCopyOverlay: TranslationBlockCopyOverlay? = null
+    private var translationCorrectionOverlay: TranslationCorrectionOverlay? = null
 
     private var loopJob: Job? = null
     private var translationRenderJob: Job? = null
@@ -343,6 +354,7 @@ class CaptureService : Service() {
             settingsRepository = settingsRepository,
             ioScope = scope,
             onTranslationBlockDetailRequested = ::showTranslationBlockCopyPanel,
+            onTranslationCorrectionRequested = ::showTranslationCorrection,
             onFloatingWindowDismissed = { ttsEngine.stop() },
         )
         floatingButton = FloatingButtonManager(
@@ -682,6 +694,7 @@ class CaptureService : Service() {
         }
         logWordSelectPerf("started", "rect=${rect.width()}x${rect.height()}")
         var captureChromeRestored = false
+        var activeCard: TranslationCardOverlay? = null
         fun restoreCaptureChromeOnce(showLoading: Boolean) {
             if (captureChromeRestored) return
             captureChromeRestored = true
@@ -689,6 +702,13 @@ class CaptureService : Service() {
                 showLoading = showLoading,
                 restoreFloatingButton = restoreFloatingButtonAfterScreenshot
             )
+        }
+        suspend fun dismissActiveCard() {
+            val card = activeCard ?: return
+            withContext(Dispatchers.Main) {
+                if (card.isShown()) card.dismiss()
+            }
+            activeCard = null
         }
         try {
             logVerticalDiag(diagId, "wordSelect start rect=${rect.toDiagString()}")
@@ -706,6 +726,51 @@ class CaptureService : Service() {
             }
             logWordSelectPerf("screenshot_ready", "frame=${full.width}x${full.height}")
             restoreCaptureChromeOnce(showLoading = false)
+            val settings = settingsRepository.get()
+            val sourceSpeech = wordSelectTtsAction(
+                settings = settings.copy(targetLang = settings.sourceLang),
+                diagId = diagId,
+                role = "source",
+                playbackId = "word-select:$diagId:source",
+            )
+            val translationSpeech = wordSelectTtsAction(
+                settings = settings,
+                diagId = diagId,
+                role = "translation",
+                playbackId = "word-select:$diagId:translation",
+            )
+            val dictionarySpeech = wordSelectTtsAction(
+                settings = settings,
+                diagId = diagId,
+                role = "dictionary",
+                playbackId = "word-select:$diagId:dictionary",
+            )
+            val card = withContext(Dispatchers.Main) {
+                (translationCard ?: TranslationCardOverlay(
+                    context = this@CaptureService,
+                    onDismissed = { ttsEngine.stop() },
+                ).also {
+                    translationCard = it
+                }).also {
+                    it.show(
+                        sourceText = "",
+                        translation = null,
+                        wordResult = null,
+                        settings = settings,
+                        loading = true,
+                        onSpeakSource = sourceSpeech,
+                        onSpeakTranslation = translationSpeech,
+                        onSpeakDictionary = dictionarySpeech,
+                        onCorrectTranslation = { source, translation ->
+                            showTranslationCorrection(
+                                TranslationCorrectionRequest(source, translation)
+                            )
+                        },
+                    )
+                }
+            }
+            activeCard = card
+            logWordSelectPerf("card_visible", "phase=recognizing")
             val fullStats = sampleBitmapFrameStats(full)
             logVerticalDiag(
                 diagId,
@@ -713,7 +778,6 @@ class CaptureService : Service() {
             )
             logCaptureGeometry(diagId, "wordSelect", full)
             logBlankLikeFrame(diagId, "screenshot", fullStats)
-            val settings = settingsRepository.get()
             // 用 word-select rect 裁剪，**不**走 settings.captureRegion——划词是一次性独立选区
             val cropped = try {
                 cropRect(full, rect)
@@ -723,6 +787,7 @@ class CaptureService : Service() {
             }
             full.recycle()
             if (cropped == null) {
+                dismissActiveCard()
                 val msg = getString(R.string.word_card_no_text)
                 mainScope.launch { overlay?.showErrorHint(msg) }
                 return
@@ -755,6 +820,7 @@ class CaptureService : Service() {
                     settings.ocrEngine.name,
                     shortError(t)
                 )
+                dismissActiveCard()
                 mainScope.launch { overlay?.showErrorHint(msg) }
                 cropped.recycle()
                 return
@@ -770,10 +836,13 @@ class CaptureService : Service() {
             val text = orderedOcrBlocks.joinToString(" ") { it.text.trim() }.trim()
             logVerticalDiag(diagId, "wordSelect joined ${text.toDiagText()}")
             if (text.isEmpty()) {
+                dismissActiveCard()
                 val msg = getString(R.string.word_card_no_text)
                 mainScope.launch { overlay?.showErrorHint(msg) }
                 return
             }
+            withContext(Dispatchers.Main) { card.updateSource(text) }
+            logWordSelectPerf("source_visible")
             logRepository.info(
                 LogRepository.Category.OCR,
                 getString(R.string.log_msg_ocr_results_format, ocrBlocks.size, settings.ocrEngine.name, text),
@@ -793,45 +862,6 @@ class CaptureService : Service() {
                     "request=${dictionaryTerm != null} engine=${settings.translatorEngine.name} " +
                 "term=${dictionaryTerm?.toDiagText() ?: "none"}"
             )
-            val sourceSpeech = wordSelectTtsAction(
-                settings = settings.copy(targetLang = settings.sourceLang),
-                diagId = diagId,
-                role = "source",
-                playbackId = "word-select:$diagId:source",
-            )
-            val translationSpeech = wordSelectTtsAction(
-                settings = settings,
-                diagId = diagId,
-                role = "translation",
-                playbackId = "word-select:$diagId:translation",
-            )
-            val dictionarySpeech = wordSelectTtsAction(
-                settings = settings,
-                diagId = diagId,
-                role = "dictionary",
-                playbackId = "word-select:$diagId:dictionary",
-            )
-            val card = withContext(Dispatchers.Main) {
-                (translationCard ?: TranslationCardOverlay(
-                    context = this@CaptureService,
-                    onDismissed = { ttsEngine.stop() },
-                ).also {
-                    translationCard = it
-                }).also {
-                    it.show(
-                        sourceText = text,
-                        translation = null,
-                        wordResult = null,
-                        settings = settings,
-                        loading = true,
-                        onSpeakSource = sourceSpeech,
-                        onSpeakTranslation = translationSpeech,
-                        onSpeakDictionary = dictionarySpeech,
-                    )
-                }
-            }
-            logWordSelectPerf("card_visible")
-
             // 单词先请求结构化词典；没有有效词典结果时，才回退到主翻译流式输出。
             val translateStartedAt = System.currentTimeMillis()
             val translateStartedElapsed = SystemClock.elapsedRealtime()
@@ -897,7 +927,7 @@ class CaptureService : Service() {
                 ).text
             withContext(Dispatchers.Main) {
                 card.updateWordResult(outcome.wordResult)
-                card.updateTranslation(displayedTranslation)
+                card.updateTranslation(displayedTranslation, final = true)
             }
             if (outcome.translationError != null && outcome.wordResult == null) {
                 val msg = getString(
@@ -919,6 +949,12 @@ class CaptureService : Service() {
                 "result_complete",
                 "translationMs=${elapsedSince(translateStartedAt)} chunks=${outcome.chunkCount}",
             )
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            dismissActiveCard()
+            throw ce
+        } catch (t: Throwable) {
+            dismissActiveCard()
+            throw t
         } finally {
             restoreCaptureChromeOnce(showLoading = false)
             logWordSelectPerf("pipeline_finished")
@@ -1152,7 +1188,100 @@ class CaptureService : Service() {
                         role = "block_translation_selection",
                         playbackId = "translation-block:$diagId:translation",
                     ),
+                    onCorrectTranslation = {
+                        showTranslationCorrection(
+                            TranslationCorrectionRequest(source, translation)
+                        )
+                    },
                 )
+            }
+        }
+    }
+
+    private fun showTranslationCorrection(request: TranslationCorrectionRequest) {
+        scope.launch {
+            val settings = settingsRepository.get()
+            val memoryScope = translationMemoryService.currentScope(settings)
+            withContext(Dispatchers.Main) {
+                translationBlockCopyOverlay?.dismiss()
+                val editor = translationCorrectionOverlay
+                    ?: TranslationCorrectionOverlay(this@CaptureService).also {
+                        translationCorrectionOverlay = it
+                    }
+                editor.show(
+                    request = request,
+                    scope = memoryScope,
+                    onSave = { draft ->
+                        overlay?.applyTranslationCorrection(draft)
+                        translationCard?.applyTranslationCorrection(draft)
+                        persistTranslationCorrection(
+                            draft = draft,
+                            settings = settings,
+                            memoryScope = memoryScope,
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    private fun persistTranslationCorrection(
+        draft: TranslationCorrectionDraft,
+        settings: Settings,
+        memoryScope: com.gameocr.app.translate.TranslationMemoryScope?,
+    ) {
+        scope.launch {
+            val result = runCatching {
+                var memorySaved = false
+                var glossarySaved = false
+                if (memoryScope != null && draft.rememberTranslation) {
+                    translationMemoryService.remember(
+                        observedSource = draft.observedSource,
+                        correctedSource = draft.correctedSource,
+                        correctedTranslation = draft.correctedTranslation,
+                        settings = settings,
+                        scope = memoryScope,
+                    )
+                    memorySaved = true
+                }
+                draft.glossary?.let { glossary ->
+                    translationGlossaryRepository.upsert(
+                        GlossaryTermEntity(
+                            scopePackage = memoryScope?.packageName.orEmpty(),
+                            appLabel = memoryScope?.appLabel.orEmpty(),
+                            sourceLang = settings.sourceLang,
+                            targetLang = settings.targetLang,
+                            sourceTerm = glossary.sourceTerm,
+                            targetTerm = glossary.targetTerm,
+                            category = GlossaryTermCategory.TERM,
+                        )
+                    )
+                    glossarySaved = true
+                }
+                when {
+                    memorySaved && glossarySaved -> getString(
+                        R.string.translation_correction_saved_memory_and_glossary,
+                        memoryScope?.appLabel.orEmpty(),
+                    )
+                    glossarySaved -> getString(
+                        R.string.translation_correction_saved_glossary,
+                    )
+                    memorySaved -> getString(
+                        R.string.translation_correction_saved_memory,
+                        memoryScope?.appLabel.orEmpty(),
+                    )
+                    else -> getString(R.string.translation_correction_saved_current)
+                }
+            }
+            withContext(Dispatchers.Main) {
+                val message = result.getOrElse { error ->
+                    Timber.w(error, "Failed to persist translation correction")
+                    getString(
+                        R.string.translation_correction_save_failed,
+                        error.message ?: error.javaClass.simpleName,
+                    )
+                }
+                Toast.makeText(this@CaptureService, message, Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -2894,6 +3023,13 @@ class CaptureService : Service() {
                     "coverage=${String.format(Locale.US, "%.3f", decision.minimumModelCoverage)}"
                 if (diagId != null) logVerticalDiag(diagId, detail) else Timber.i(detail)
             }
+            dump.localRepairResult.crops.forEach { crop ->
+                val detail = "delayed repair model=${crop.modelBubbleIndex} " +
+                    "components=${crop.acceptedComponentCount}/${crop.componentCount} " +
+                    "repairedPixels=${crop.repairedPixels}/${crop.erasePixels} " +
+                    "patchEligible=${crop.fullyRepaired}"
+                if (diagId != null) logVerticalDiag(diagId, detail) else Timber.i(detail)
+            }
             dump.repairResult.decisions
                 .filterNot { it.accepted }
                 .groupingBy { it.reason }
@@ -3939,6 +4075,8 @@ class CaptureService : Service() {
         translationCard = null
         translationBlockCopyOverlay?.dismiss()
         translationBlockCopyOverlay = null
+        translationCorrectionOverlay?.dismiss()
+        translationCorrectionOverlay = null
         ttsEngine.stop()
         screenshotter?.release()
         screenshotter = null
